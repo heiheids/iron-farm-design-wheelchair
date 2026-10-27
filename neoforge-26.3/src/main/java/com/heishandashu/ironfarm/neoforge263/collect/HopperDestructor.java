@@ -56,6 +56,12 @@ public final class HopperDestructor {
     /** 诊断日志限流。 */
     private static long lastLogMillis;
 
+    /** 诊断：销毁次数计数（只打前 10 条）。 */
+    private static int DESTROYED;
+
+    /** 诊断：漏斗详情只打前 5 条。 */
+    private static int DIAG_HOPPER;
+
     /**
      * 重建目标列表的扫描半径（格）。
      *
@@ -187,6 +193,20 @@ public final class HopperDestructor {
                     if (p.distSqr(center) > radiusSq) {
                         continue;
                     }
+                    // 诊断：打印每个漏斗的朝向和目标方块名，
+                    // 这样才能判断"不是白色羊毛"还是"方块名对不上"。
+                    if (DIAG_HOPPER < 5) {
+                        DIAG_HOPPER++;
+                        BlockState hs = level.getBlockState(p);
+                        Direction f = hs.hasProperty(HopperBlock.FACING)
+                                ? hs.getValue(HopperBlock.FACING) : null;
+                        BlockPos tp = f == null ? p : p.relative(f);
+                        Identifier tid = net.minecraft.core.registries.BuiltInRegistries.BLOCK
+                                .getKey(level.getBlockState(tp).getBlock());
+                        LOG.info("[ironfarm] HOPPER detail pos=" + p.toShortString()
+                                + " facing=" + f + " target=" + tp.toShortString()
+                                + " block=" + tid);
+                    }
                     if (pointsAtWool(level, hopper)) {
                         targets.add(p.asLong());
                     }
@@ -211,6 +231,9 @@ public final class HopperDestructor {
 
     private void clearTracked(ServerLevel level, long now) {
         // 这层不依赖 center，center 为 null 也能正常清理已登记的漏斗。
+        int reached = 0;
+        int foundHopper = 0;
+        int hadItems = 0;
         if (targets.isEmpty()) {
             return;
         }
@@ -235,7 +258,19 @@ public final class HopperDestructor {
                 targets.remove(key);
                 continue;
             }
+            foundHopper++;
+            if (!isEmptyHopper(hopper)) {
+                hadItems++;
+            }
             clearAndRecord(hopper, now);
+        }
+        // 诊断：三层数字分别对应"登记了几个 / 是不是漏斗 / 里面有没有东西"。
+        long nowMs2 = System.currentTimeMillis();
+        if (nowMs2 - lastLogMillis > 4000) {
+            lastLogMillis = nowMs2;
+            LOG.info("[ironfarm] HOPPER clear: tracked=" + keys.length
+                    + ", hoppers=" + foundHopper + ", hadItems=" + hadItems)
+                    ;
         }
     }
 
@@ -247,6 +282,16 @@ public final class HopperDestructor {
      * <p>没有物品时直接返回，不写 setChanged() ——
      * 否则每 8 tick 都会把区块标脏，反而增加存档压力。</p>
      */
+    /** 诊断用：漏斗里有没有物品。 */
+    private static boolean isEmptyHopper(HopperBlockEntity hopper) {
+        for (int i = 0; i < hopper.getContainerSize(); i++) {
+            if (!hopper.getItem(i).isEmpty()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     private void clearAndRecord(HopperBlockEntity hopper, long now) {
         boolean any = false;
         for (int i = 0; i < hopper.getContainerSize(); i++) {
@@ -258,6 +303,11 @@ public final class HopperDestructor {
                     .getKey(stack.getItem());
             if (id != null) {
                 statsSupplier.get().itemDestroy().record(now, id.toString(), stack.getCount());
+                DESTROYED++;
+                if (DESTROYED <= 10) {
+                    LOG.info("[ironfarm] DESTROY item=" + id + " count=" + stack.getCount()
+                            + " totalItems=" + statsSupplier.get().itemDestroy().totalItems());
+                }
             }
             any = true;
         }

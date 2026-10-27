@@ -80,7 +80,7 @@ public final class VillagerStatusScreen extends Screen {
     }
 
     public VillagerStatusScreen(Screen parent, int entityId) {
-        super(Component.translatable("ironfarm.gui.villager_status"));
+        super(tr("ironfarm.gui.villager_status"));
         this.parent = parent;
         this.entityId = entityId;
     }
@@ -91,7 +91,7 @@ public final class VillagerStatusScreen extends Screen {
         this.top = (this.height - panelHeight()) / 2;
 
         this.addRenderableWidget(Button.builder(
-                        Component.translatable("ironfarm.gui.close"),
+                        tr("ironfarm.gui.close"),
                         b -> this.onClose())
                 .bounds(this.left + panelWidth() - 56, this.top + panelHeight() - 24, 48, 16)
                 .build());
@@ -140,7 +140,7 @@ public final class VillagerStatusScreen extends Screen {
 
         if (report == null) {
             g.centeredText(this.font,
-                    Component.translatable("ironfarm.gui.villager_gone"),
+                    tr("ironfarm.gui.villager_gone"),
                     this.width / 2, this.height / 2, 0xFFFF6060);
             return;
         }
@@ -276,4 +276,16 @@ public final class VillagerStatusScreen extends Screen {
     public boolean isPauseScreen() {
         return false;
     }
+
+    /**
+     * 用**模组自己的 Lang** 取文本，而不是 Minecraft 的 Component.translatable。
+     *
+     * <p>两套语言系统混用会导致"切到英文后一部分文字还是中文" ——
+     * Component.translatable 跟游戏语言，Lang 跟模组设置里的语言开关。</p>
+     */
+    private static net.minecraft.network.chat.MutableComponent tr(String key) {
+        return Component.literal(
+                com.heishandashu.ironfarm.fabric263.IronFarmClientState.get().lang().get(key));
+    }
+
 }

@@ -77,7 +77,7 @@ public final class SettingsScreen extends Screen {
     private final Screen parent;
 
     public SettingsScreen(Screen parent) {
-        super(Component.translatable("ironfarm.gui.settings"));
+        super(tr("ironfarm.gui.settings"));
         this.parent = parent;
     }
 
@@ -99,7 +99,7 @@ public final class SettingsScreen extends Screen {
         for (int i = 0; i < tabs.length; i++) {
             final Tab t = tabs[i];
             Button b = Button.builder(
-                            Component.translatable(t.langKey),
+                            tr(t.langKey),
                             btn -> {
                                 this.tab = t;
                                 this.listScroll = 0;
@@ -113,7 +113,7 @@ public final class SettingsScreen extends Screen {
 
         // 底部关闭
         this.addRenderableWidget(Button.builder(
-                        Component.translatable("ironfarm.gui.close"),
+                        tr("ironfarm.gui.close"),
                         b -> this.onClose())
                 .bounds(left + panelWidth() - 66, top + panelHeight() - 24, 56, 16)
                 .build());
@@ -175,9 +175,9 @@ public final class SettingsScreen extends Screen {
         // 语言切换（单独一行）
         y += 6;
         this.addRenderableWidget(Button.builder(
-                        Component.translatable("ironfarm.gui.settings.language")
+                        tr("ironfarm.gui.settings.language")
                                 .append(": ")
-                                .append(Component.translatable(langLabelKey(s.locale))),
+                                .append(tr(langLabelKey(s.locale))),
                         b -> {
                             // 循环切换：auto → zh_cn → en_us → auto
                             String next;
@@ -242,10 +242,25 @@ public final class SettingsScreen extends Screen {
         return y + ROW_HEIGHT;
     }
 
+    /**
+     * 用**模组自己的 Lang** 取文本，而不是 Minecraft 的 Component.translatable。
+     *
+     * <p>两套语言系统混用会导致"切到英文后一部分文字还是中文" ——
+     * Component.translatable 跟游戏语言，Lang 跟模组设置里的语言开关。</p>
+     */
+    private static net.minecraft.network.chat.MutableComponent tr(String key) {
+        return Component.literal(IronFarmClientState.get().lang().get(key));
+    }
+
+    /** 带 %s 占位的版本。 */
+    private static net.minecraft.network.chat.MutableComponent tr(String key, Object... args) {
+        return Component.literal(IronFarmClientState.get().lang().format(key, args));
+    }
+
     private static Component toggleText(String labelKey, boolean on) {
-        return Component.translatable(labelKey)
+        return tr(labelKey)
                 .append(": ")
-                .append(Component.translatable(
+                .append(tr(
                         on ? "ironfarm.gui.settings.on" : "ironfarm.gui.settings.off"));
     }
 
@@ -267,8 +282,8 @@ public final class SettingsScreen extends Screen {
     private void buildStatsTab() {
         IronFarmClientState state = IronFarmClientState.get();
         Component label = resetArmed
-                ? Component.translatable("ironfarm.gui.stats.reset_confirm")
-                : Component.translatable("ironfarm.gui.stats.reset");
+                ? tr("ironfarm.gui.stats.reset_confirm")
+                : tr("ironfarm.gui.stats.reset");
 
         this.addRenderableWidget(Button.builder(label, b -> {
                     if (!resetArmed) {
@@ -353,7 +368,7 @@ public final class SettingsScreen extends Screen {
 
         if (!state.statsComplete()) {
             g.drawString(this.font,
-                    Component.translatable("ironfarm.gui.stats.multiplayer_warning"),
+                    tr("ironfarm.gui.stats.multiplayer_warning"),
                     x, y, 0xFFFFB020, false);
             y += 12;
         }
@@ -383,7 +398,7 @@ public final class SettingsScreen extends Screen {
         g.fill(x, y, left + panelWidth() - PADDING, y + 1, 0xFF4A4A55);
         y += 6;
         g.drawString(this.font,
-                Component.translatable("ironfarm.gui.items.section"),
+                tr("ironfarm.gui.items.section"),
                 x, y, 0xFFFFD24A, false);
         y += 13;
 
@@ -432,11 +447,11 @@ public final class SettingsScreen extends Screen {
         int y = viewTop - aboutScroll;
 
         // ---- 作者信息 ----
-        g.drawString(this.font, Component.translatable("ironfarm.name"), x, y, 0xFFFFFFFF, false);
+        g.drawString(this.font, tr("ironfarm.name"), x, y, 0xFFFFFFFF, false);
         y += 13;
-        g.drawString(this.font, Component.translatable("ironfarm.author"), x, y, 0xFFB0B0B8, false);
+        g.drawString(this.font, tr("ironfarm.author"), x, y, 0xFFB0B0B8, false);
         y += 11;
-        g.drawString(this.font, Component.translatable("ironfarm.homepage"), x, y, 0xFF8AB4F8, false);
+        g.drawString(this.font, tr("ironfarm.homepage"), x, y, 0xFF8AB4F8, false);
         y += 14;
         for (String line : wrap("ironfarm.about.line1", panelWidth() - PADDING * 2)) {
             g.drawString(this.font, line, x, y, 0xFFB0B0B8, false);
@@ -448,7 +463,7 @@ public final class SettingsScreen extends Screen {
         }
         y += 4;
         g.drawString(this.font,
-                Component.translatable("ironfarm.about.version", state.settings().locale),
+                tr("ironfarm.about.version", state.settings().locale),
                 x, y, 0xFF6A6A78, false);
         y += 18;
 
@@ -599,7 +614,7 @@ public final class SettingsScreen extends Screen {
      */
     private java.util.List<String> wrap(String langKey, int width) {
         java.util.List<String> out = new java.util.ArrayList<String>();
-        String raw = Component.translatable(langKey).getString();
+        String raw = tr(langKey).getString();
         for (String para : raw.split("\n", -1)) {
             if (para.isEmpty()) {
                 out.add("");

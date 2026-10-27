@@ -2810,3 +2810,54 @@
   确认字符串应该用 grep 找 class 文件里的字节：
       Select-String -Path xxx.class -Pattern 'itemsStartGameTime' -Encoding Byte
   或者干脆——**用测试验证行为**，别用反编译猜。
+
+
+----------------------------------------------------------------
+三十八、两套语言系统混用（第五十六轮）
+----------------------------------------------------------------
+【现象】切到英文后，只有"Items destroyed"变成英文，其余全是中文。
+
+【坑 142】Component.translatable 和自家 Lang 是两套系统
+  Minecraft 的界面文本有两条路：
+    · Component.translatable("key")  → 走**游戏语言**（MC 的 zh_cn/en_us）
+    · Lang.get("key")                → 走**模组设置里的语言开关**
+
+  我的界面里两种混着用：
+    g.text(font, Component.translatable("ironfarm.gui.items.section"), ...)  // MC 语言
+    for (Row r : ui.itemStats(...)) { g.text(font, r.label, ...) }           // 模组 Lang
+
+  用户把模组语言设成中文、游戏语言设成英文，就出现
+  "标题英文 + 内容中文"的混排。
+
+  【修法】界面所有文本统一走模组 Lang：
+      private static MutableComponent tr(String key) {
+          return Component.literal(IronFarmClientState.get().lang().get(key));
+      }
+  然后把 16 处 Component.translatable 全换成 tr。
+
+  【教训】**一个界面里只能有一个语言来源。**
+  加新文本前先确认"这个界面其他文字是怎么取的"，
+  照抄同一套，不要因为 API 更顺手就混用。
+
+【坑 143】.append() 需要 MutableComponent，不是 Component
+  把 tr() 的返回类型写成 Component 后编译报错：
+      "找不到符号: 方法 append(String)，位置: 接口 Component"
+  Component 是只读接口，append 只在 MutableComponent 上。
+  返回类型必须是 MutableComponent。
+
+  【另一个发现】Component.literal("...") 本身就返回 MutableComponent，
+  所以直接写 `Component.literal(...)` 作为返回表达式是合法的。
+
+【坑 144】整文件复制到不同 MC 版本必炸
+  我把 26.3 的 SettingsScreen 整文件复制给 1.21.1，
+  编译报 20+ 个"找不到符号" —— 因为 1.21.1 和 26.3 的
+  渲染 API 完全不同（GuiGraphics vs GuiGraphicsExtractor 等）。
+
+  【教训】**跨大版本只能做文本级的最小替换，不能整文件覆盖。**
+  这次正确做法：
+      1. git checkout HEAD -- <1.21.1 的文件>   恢复
+      2. 只做 `Component.translatable(` → `tr(` 的字符串替换
+      3. 插入一个 tr 方法
+  其它代码一行不动。
+
+  备份机制第三次救场。
