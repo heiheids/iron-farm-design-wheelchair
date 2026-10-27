@@ -285,6 +285,10 @@ public final class IronFarmClientState {
             lang = Lang.load(want);
             loadedLocale = want;
             uiModel = new UiModel(lang);
+            // ⚠ 重建后必须重新注入，否则物品名退回原始 ID。
+            //   这就是"Fabric 版物品名还是 iron_ingot"的根因 ——
+            //   NeoForge 版修过这条，Fabric 版漏了。
+            applyItemNameResolver(uiModel);
         }
         mobRegistry.strictMode = settings.scaryMobStrictMode;
         engine = new ConditionEngine(profile);
