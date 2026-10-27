@@ -9,7 +9,7 @@
 $ErrorActionPreference = 'Stop'
 
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
-$Version = '0.45.0'
+$Version = '0.46.0'
 $StageName = "ironfarm-$Version"
 $Stage = Join-Path $Root "build/pack/$StageName"
 $ZipPath = Join-Path $Root "刷铁机设计轮椅-$Version.zip"

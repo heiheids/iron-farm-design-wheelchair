@@ -2759,3 +2759,54 @@
       "差: $($open-$close)"   # 必须是 0
 
   这个检查几次救了我，比编译报错更早发现问题。
+
+
+----------------------------------------------------------------
+三十七、新功能忘了接持久化（第五十三轮）
+----------------------------------------------------------------
+【现象】"统计不到销毁物品信息" —— 界面上数字有，但重进世界就没了。
+
+【坑 140】加了新统计类，却没在 StatsCodec 里读写
+  ItemDestroyStats 加上了，StatsRecorder 也持有它，
+  UiModel 也显示它，测试也覆盖了它的计算 ——
+  但 **StatsCodec.write/read 里一个字都没提它**。
+
+  结果：
+    · 不关游戏时一切正常（数据在内存里）
+    · 关游戏/换世界 → 读到新 StatsRecorder → 实例是新的 → 数据全丢
+
+  【为什么测试没抓到】
+  我写的 ItemDestroyStatsTest 全是纯内存测试：
+      s.record(...); assertEquals(50, s.itemsPerHour(...));
+  它验证的是"对象自己算得对"，不验证"存得下来"。
+
+  持久化必须单独测**往返**：
+      write(a) → read(b) → 断言 b 的内容 == a
+
+  这次补了 5 条：
+    · itemDestroySurvivesRoundTrip      数据能存能读
+    · fileContainsItemLines             文件里真的有 item= 行
+    · oldFileWithoutItemLinesStillLoads 旧文件不崩
+    · malformedItemLineIsSkipped        坏行只丢那一行
+    · itemsStartTimeIsPersisted         起始时间也存了
+
+  【一般规律】**新增任何需要跨会话保留的状态，必须同时改三处**：
+    1. 数据类（字段 + 访问器）
+    2. 序列化（write + read）
+    3. 往返测试（不是纯内存测试！）
+
+  第 3 处最容易漏，因为"功能看起来是好的"。
+
+【坑 141】javap 看不到字符串拼接的常量
+  我用 javap 检查编译产物里有没有 "itemsStartGameTime"，
+  结果没有 —— 但源码明明有。
+
+  原因：`out.write("itemsStartGameTime=" + x + "\n")` 会被
+  编译成 invokedynamic + 字符串常量池里的**片段**，
+  javap 的输出里不一定能看到完整字符串。
+
+  【教训】javap 适合看**方法调用**（有没有调用 X、调了几次），
+  不适合确认"某个字符串常量在不在"。
+  确认字符串应该用 grep 找 class 文件里的字节：
+      Select-String -Path xxx.class -Pattern 'itemsStartGameTime' -Encoding Byte
+  或者干脆——**用测试验证行为**，别用反编译猜。

@@ -9,6 +9,8 @@ import com.heishandashu.ironfarm.engine.stats.StatsRecorder;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.io.IOException;
+import java.io.StringWriter;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -24,6 +26,13 @@ class StatsCodecTest {
 
     private VillagerSnapshot v(int id) {
         return VillagerSnapshot.of(id, 0, 64, 0);
+    }
+
+    /** 序列化成文本，供往返测试用。 */
+    private static String write(StatsRecorder s) throws IOException {
+        StringWriter w = new StringWriter();
+        StatsCodec.write(s, w);
+        return w.toString();
     }
 
     @Test
@@ -187,4 +196,75 @@ class StatsCodecTest {
         StatsRecorder s = StatsCodec.read(text);
         assertTrue(s.failuresByCount().isEmpty());
     }
+
+    // ==================================================================
+    // 实物统计（0.46.0 补上持久化）
+    //
+    // 0.45.0 及之前 StatsCodec 完全没写这部分，数据只在内存里，
+    // 一关游戏就归零 —— 用户反馈"统计不到销毁物品信息"就是这个。
+    // ==================================================================
+
+    /** 实物统计必须能存下来并读回来。 */
+    @Test
+    void itemDestroySurvivesRoundTrip() throws IOException {
+        StatsRecorder a = new StatsRecorder();
+        a.start(1000L, 111L);
+        a.itemDestroy().record(2000L, "minecraft:iron_ingot", 42);
+        a.itemDestroy().record(2100L, "minecraft:poppy", 7);
+
+        StatsRecorder b = StatsCodec.read(write(a));
+
+        assertEquals(42, b.itemDestroy().countOf("minecraft:iron_ingot"));
+        assertEquals(7, b.itemDestroy().countOf("minecraft:poppy"));
+        assertEquals(49, b.itemDestroy().totalItems());
+        assertEquals(2, b.itemDestroy().kinds());
+    }
+
+    /** 文件里必须有 item= 行 —— 否则等于没存。 */
+    @Test
+    void fileContainsItemLines() throws IOException {
+        StatsRecorder a = new StatsRecorder();
+        a.start(1000L, 111L);
+        a.itemDestroy().record(2000L, "minecraft:iron_ingot", 5);
+
+        String text = write(a);
+        assertTrue(text.contains("item=minecraft:iron_ingot|5"),
+                "统计文件里必须有 item=行，实际内容：" + text);
+        assertTrue(text.contains("itemsStartGameTime="),
+                "必须记录实物统计的起始时间");
+    }
+
+    /** 旧版文件（没有 item= 行）要能正常读，不能崩。 */
+    @Test
+    void oldFileWithoutItemLinesStillLoads() {
+        String old = "formatVersion=1\nstartGameTime=500\ngolemsSpawned=10\n";
+        StatsRecorder s = StatsCodec.read(old);
+        assertEquals(10, s.golemsSpawned());
+        assertEquals(0, s.itemDestroy().totalItems());
+    }
+
+    /** 坏行只丢弃那一行，不连累其它物品。 */
+    @Test
+    void malformedItemLineIsSkipped() {
+        String text = "formatVersion=1\nstartGameTime=500\n"
+                + "item=minecraft:dirt|notanumber\n"
+                + "item=minecraft:stone|12\n"
+                + "item=bogus\n";
+        StatsRecorder s = StatsCodec.read(text);
+        assertEquals(12, s.itemDestroy().countOf("minecraft:stone"));
+        assertEquals(1, s.itemDestroy().kinds(), "坏行不能产生额外条目");
+    }
+
+    /** 实物统计的起始时间与主统计对齐后要能存回来。 */
+    @Test
+    void itemsStartTimeIsPersisted() throws IOException {
+        StatsRecorder a = new StatsRecorder();
+        a.start(3000L, 222L);
+        a.itemDestroy().record(4000L, "minecraft:iron_ingot", 1);
+
+        StatsRecorder b = StatsCodec.read(write(a));
+        assertEquals(3000L, b.itemDestroy().startGameTime(),
+                "实物统计的起点应与主统计一致");
+    }
+
 }

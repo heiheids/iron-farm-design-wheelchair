@@ -62,6 +62,18 @@ public final class StatsCodec {
         out.write("golemDiscarded=" + lc.discardedCount() + "\n");
         out.write("\n");
 
+        // 实物统计：一行一个物品。
+        //
+        // ⚠ 这一段曾经漏掉（0.45.0 及之前），导致实物统计只存在内存里，
+        //   一关游戏就归零。用户反馈"统计不到销毁物品信息"就是这个。
+        var idst = s.itemDestroy();
+        out.write("itemsStartGameTime=" + idst.startGameTime() + "\n");
+        out.write("itemsTotal=" + idst.totalItems() + "\n");
+        for (var ie : idst.sortedByCount()) {
+            out.write("item=" + ie.itemId + "|" + ie.total + "\n");
+        }
+
+
         out.write("# 失败记录：一行一条，字段用 | 分隔\n");
         out.write("# failure rows: villagerId|reasonCode|count|lastGameTime|lastValue|lastThreshold\n");
         for (FailureRecord f : s.failuresByCount()) {
@@ -102,6 +114,8 @@ public final class StatsCodec {
                 String value = t.substring(eq + 1).trim();
                 if ("failure".equals(key)) {
                     applyFailure(s, value);
+                } else if ("item".equals(key)) {
+                    applyItem(s, value);
                 } else {
                     kv.put(key, value);
                 }
@@ -137,6 +151,12 @@ public final class StatsCodec {
                     lng(kv, "golemAliveSum", 0), lng(kv, "golemAliveCount", 0),
                     lng(kv, "golemDiscarded", 0));
         }
+        // 实物统计的起始时间（可能与主统计不同：syncStart 会对齐，
+        // 但旧版文件里可能是它自己的值）。
+        long itemsStart = lng(kv, "itemsStartGameTime", -1);
+        if (itemsStart >= 0) {
+            s.itemDestroy().syncStart(itemsStart);
+        }
     }
 
     /**
@@ -145,6 +165,38 @@ public final class StatsCodec {
      * <p>字段数不对、数字解析失败、reasonCode 为空 —— 任何一项不满足都直接丢弃那条。
      * 丢弃比"猜一个值填进去"安全：错的统计比没有统计更误导人。</p>
      */
+    /**
+     * 解析一条物品销毁记录（格式 itemId|total）。
+     *
+     * <p>与 failure 一样：字段不全、数字非法就直接丢弃 ——
+     * 错的统计比没有统计更误导人。</p>
+     */
+    private static void applyItem(StatsRecorder s, String value) {
+        if (value == null || value.isEmpty()) {
+            return;
+        }
+        int bar = value.lastIndexOf('|');
+        if (bar <= 0 || bar >= value.length() - 1) {
+            return;
+        }
+        String itemId = value.substring(0, bar).trim();
+        if (itemId.isEmpty()) {
+            return;
+        }
+        try {
+            long total = Long.parseLong(value.substring(bar + 1).trim());
+            if (total <= 0) {
+                return;
+            }
+            // 用物品自己的起始时间；header 里的 itemsStartGameTime 会在其后
+            // 调用 syncStart 覆盖成主统计的起点（若存在）。
+            long start = s.itemDestroy().startGameTime();
+            s.itemDestroy().restore(start < 0 ? 0 : start, itemId, total);
+        } catch (NumberFormatException ignored) {
+            // 单个坏行不影响其它物品。
+        }
+    }
+
     private static void applyFailure(StatsRecorder s, String value) {
         if (value == null || value.isEmpty()) {
             return;
