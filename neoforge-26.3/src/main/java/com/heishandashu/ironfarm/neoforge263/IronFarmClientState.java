@@ -14,13 +14,13 @@ import com.heishandashu.ironfarm.engine.spawn.SpawnScanner;
 import com.heishandashu.ironfarm.engine.stats.StatsRecorder;
 import com.heishandashu.ironfarm.engine.ui.UiModel;
 import com.heishandashu.ironfarm.engine.version.VersionProfile;
-import com.heishandashu.ironfarm.neoforge263.adapter.WorldBlockQuery;
-import com.heishandashu.ironfarm.neoforge263.adapter.WorldSightQuery;
-import com.heishandashu.ironfarm.neoforge263.collect.ScaryMobCollector;
-import com.heishandashu.ironfarm.neoforge263.collect.SingleplayerBridge;
-import com.heishandashu.ironfarm.neoforge263.collect.VillagerCollector;
-import com.heishandashu.ironfarm.neoforge263.config.SettingsIO;
-import com.heishandashu.ironfarm.neoforge263.config.StatsIO;
+import com.heishandashu.ironfarm.fabric263.adapter.WorldBlockQuery;
+import com.heishandashu.ironfarm.fabric263.adapter.WorldSightQuery;
+import com.heishandashu.ironfarm.fabric263.collect.ScaryMobCollector;
+import com.heishandashu.ironfarm.fabric263.collect.SingleplayerBridge;
+import com.heishandashu.ironfarm.fabric263.collect.VillagerCollector;
+import com.heishandashu.ironfarm.fabric263.config.SettingsIO;
+import com.heishandashu.ironfarm.fabric263.config.StatsIO;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.world.entity.Entity;
@@ -89,13 +89,16 @@ public final class IronFarmClientState {
     private long lastScanTick = -1;
     private long lastGameTime = 0;
     /** 漏斗销毁器：延迟创建（需要 stats 已就绪）。 */
-    private com.heishandashu.ironfarm.neoforge263.collect.HopperDestructor hopperDestructor;
+    private com.heishandashu.ironfarm.fabric263.collect.HopperDestructor hopperDestructor;
     /** 上次记录"真实召唤尝试"的游戏时间。 */
     private long lastAttemptTick = -1;
     /** 上次自动保存统计的时刻（游戏时间）。 */
     private long lastStatsSaveTick = -1;
     /** 多人游戏里统计不完整 —— 界面要据此显示提示。 */
     private boolean statsComplete = true;
+
+    /** 诊断：物品名解析只打前 5 条。 */
+    private static int DIAG_SHOWN;
 
     private IronFarmClientState() {
         // 注入物品名解析器：引擎不含 Minecraft，拿不到本地化物品名，
@@ -110,8 +113,16 @@ public final class IronFarmClientState {
                 if (item == null) {
                     return null;
                 }
-                return new net.minecraft.world.item.ItemStack(item).getHoverName().getString();
+                String name = new net.minecraft.world.item.ItemStack(item).getHoverName().getString();
+                if (DIAG_SHOWN < 5) {
+                    DIAG_SHOWN++;
+                    org.slf4j.LoggerFactory.getLogger("ironfarm").info(
+                            "[ironfarm] ITEMNAME id=" + id + " item=" + item + " name=" + name);
+                }
+                return name;
             } catch (RuntimeException e) {
+                org.slf4j.LoggerFactory.getLogger("ironfarm")
+                        .warn("[ironfarm] ITEMNAME failed for " + id, e);
                 return null;
             }
         });
@@ -229,7 +240,6 @@ public final class IronFarmClientState {
         // 否则会漏掉「刷出后很快被收走」的傀儡 —— 恰恰是效率最好的那种。
         tickGolems(level, now);
 
-
         if (lastScanTick >= 0 && now - lastScanTick < SCAN_INTERVAL_TICKS) {
             return;
         }
@@ -257,33 +267,20 @@ public final class IronFarmClientState {
     /**
      * 漏斗销毁，由**服务端 tick** 驱动。
      *
-     * <p><b>⚠ 为什么不能在客户端 tick 里调用：</b></p>
-     *
-     * <p>{@code ServerChunkCache.getChunkNow(x, z)} 的实现第一行是：</p>
-     *
-     * <pre>
-     *   if (Thread.currentThread() != this.mainThread) {
-     *       return null;
-     *   }
-     * </pre>
-     *
-     * <p>客户端渲染线程调用它，**永远返回 null** ——
-     * 日志表现就是 {@code HOPPER scan: chunks=0}，
-     * 一个区块都拿不到，功能完全静默失效。
-     * 0.39/0.40 两个版本就栽在这里。</p>
-     *
-     * <p>现在改由 {@code ServerTickEvent.Post} 驱动（服务端主线程），
-     * 同时遍历所有已加载维度。</p>
+     * <p><b>⚠ 为什么不能在客户端 tick 里调用：</b>
+     * {@code ServerChunkCache.getChunkNow(x, z)} 第一行是
+     * {@code if (Thread.currentThread() != this.mainThread) return null;}
+     * —— 客户端线程调用永远拿到 null，日志表现就是 {@code chunks=0}，
+     * 功能完全静默失效。</p>
      */
     public void tickHopperOnServer(MinecraftServer server) {
         if (!settings.woolHopperEnabled) {
             return;
         }
         if (hopperDestructor == null) {
-            // ⚠ 传 supplier 而不是 stats 本身：
-            //    loadStats() 会把 stats 字段换成新对象，缓存旧引用会导致
-            //    统计数据写进被丢弃的对象（界面显示 0）。
-            hopperDestructor = new com.heishandashu.ironfarm.neoforge263.collect.HopperDestructor(
+            // 传 supplier：loadStats() 会替换 stats 字段，
+            // 缓存旧引用会导致统计写进被丢弃的对象。
+            hopperDestructor = new com.heishandashu.ironfarm.fabric263.collect.HopperDestructor(
                     this::stats);
         }
         for (ServerLevel level : server.getAllLevels()) {

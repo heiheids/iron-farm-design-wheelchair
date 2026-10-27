@@ -277,5 +277,5 @@ ironfarm.gui.settings.wool_hopper=White wool hopper void
 
 ironfarm.gui.stats.elapsed=Recorded for
 ironfarm.gui.stats.elapsed.tip=Counted in game time, so it speeds up with tick accelerators
-ironfarm.gui.stats.elapsed_format={0}h {1}m
+ironfarm.gui.stats.elapsed_format=%sh %sm
 ironfarm.gui.stats.elapsed_zero=0m

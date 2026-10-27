@@ -278,5 +278,5 @@ ironfarm.gui.settings.wool_hopper=白色羊毛漏斗销毁
 
 ironfarm.gui.stats.elapsed=已记录时长
 ironfarm.gui.stats.elapsed.tip=按游戏时间累计，开游戏加速时会同步加速
-ironfarm.gui.stats.elapsed_format={0} 小时 {1} 分
+ironfarm.gui.stats.elapsed_format=%s 小时 %s 分
 ironfarm.gui.stats.elapsed_zero=0 分

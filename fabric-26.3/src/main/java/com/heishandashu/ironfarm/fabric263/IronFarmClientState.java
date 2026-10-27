@@ -97,6 +97,9 @@ public final class IronFarmClientState {
     /** 多人游戏里统计不完整 —— 界面要据此显示提示。 */
     private boolean statsComplete = true;
 
+    /** 诊断：物品名解析只打前 5 条。 */
+    private static int DIAG_SHOWN;
+
     private IronFarmClientState() {
         // 注入物品名解析器：引擎不含 Minecraft，拿不到本地化物品名，
         // 必须由适配层提供（否则界面显示 iron_ingot 这种原始 ID）。
@@ -110,8 +113,16 @@ public final class IronFarmClientState {
                 if (item == null) {
                     return null;
                 }
-                return new net.minecraft.world.item.ItemStack(item).getHoverName().getString();
+                String name = new net.minecraft.world.item.ItemStack(item).getHoverName().getString();
+                if (DIAG_SHOWN < 5) {
+                    DIAG_SHOWN++;
+                    org.slf4j.LoggerFactory.getLogger("ironfarm").info(
+                            "[ironfarm] ITEMNAME id=" + id + " item=" + item + " name=" + name);
+                }
+                return name;
             } catch (RuntimeException e) {
+                org.slf4j.LoggerFactory.getLogger("ironfarm")
+                        .warn("[ironfarm] ITEMNAME failed for " + id, e);
                 return null;
             }
         });

@@ -112,6 +112,8 @@ public final class IronFarmClientState {
                 }
                 return new net.minecraft.world.item.ItemStack(item).getHoverName().getString();
             } catch (RuntimeException e) {
+                org.slf4j.LoggerFactory.getLogger("ironfarm")
+                        .warn("[ironfarm] ITEMNAME failed for " + id, e);
                 return null;
             }
         });
