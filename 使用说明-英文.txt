@@ -1,0 +1,353 @@
+Iron Farm Design Wheelchair - User Guide (English)
+================================================================
+Version: 0.10.0
+Author: Heishan Dashu
+Homepage: https://space.bilibili.com/19428259
+================================================================
+
+ABOUT
+Brings iron farm logic into the game: three overhead icons tell you at a
+glance whether a villager can spawn a golem, right-click shows the full
+status, and the statistics tab tells you what is blocking it.
+Supports all 11 scaring mobs and every version from 1.21 onward.
+
+
+1. INSTALLATION
+----------------------------------------------------------------
+
+  1. Install Fabric Loader 0.20.1 or newer (Minecraft 1.21.1)
+  2. Install Fabric API
+  3. Put ironfarm-fabric-1.21.1-0.10.0.jar into .minecraft/mods
+  4. Launch the game
+
+  First launch writes two files:
+    config/ironfarm.properties   settings
+    config/ironfarm-stats.txt    statistics (maintained automatically)
+
+
+2. WHAT THIS BUILD INCLUDES
+----------------------------------------------------------------
+
+  DONE
+  - Three overhead icons per villager (check / skull / speaker)
+  - Right-click a villager to open the status screen
+  - An extra "Villager status" button at the bottom of the trade screen
+  - Settings screen on hotkey I, with three tabs: Switches / Statistics / About
+  - All six switches work and save immediately
+  - Statistics tab: start time, golems spawned, evaluations, rate, failure ranking
+  - Bed lines (cyan)
+  - Panic lines (solid = effective, dashed = too far, dotted = sight blocked)
+  - Spawn area box (yellow, 17x13x17) plus a small cross on every valid spawn cell
+  - Golem detection box (purple, 33x33x33)
+  - Chinese and English, following the game language automatically
+
+  NOT YET
+  - A GUI for registering modded mob radii (editable in the config file)
+  - Integration with Jade / WTHIT
+
+
+3. THE THREE OVERHEAD ICONS
+----------------------------------------------------------------
+
+  Left to right: check, skull, speaker. They float 0.6 blocks above the
+  villager's head; each icon is 0.35 blocks square.
+
+  CHECK - are the spawn conditions met?
+    Green   adult + slept within 20 min + no golem seen in 30 s
+    Red     definitely not met (right-click to see which one)
+    Grey    data unavailable - normal in multiplayer, see below
+
+  SKULL - is the villager being scared right now?
+    Green   a scaring mob is close enough with a clear line of sight
+    Red     not being scared
+
+  SPEAKER - is the gossip baseline present?
+    Green   at least 5 qualified villagers within 10 blocks
+    Red     not enough
+    Grey    data unavailable
+
+  Icons are hidden beyond 32 blocks (adjustable, 8-64).
+
+
+  IMPORTANT: what grey means
+  ------------------------------------------------------------------
+  In multiplayer the client cannot read a villager's "last slept" time or
+  its "golem detected recently" memory - both live on the server. The icons
+  then show a grey question mark instead of a red cross.
+
+  This is deliberate. A red cross would make players tear down a farm that
+  is actually working.
+
+
+4. VILLAGER STATUS SCREEN
+----------------------------------------------------------------
+
+  Right-click a villager:
+
+    No profession (or a baby) -> the status screen opens directly
+    Has a profession          -> the trade screen opens, with an extra
+                                 "Villager status" button at the bottom
+
+  The screen has five groups:
+    - position and overall verdict
+    - individual conditions (adult, sleep, golem detection)
+    - trigger state (panicking, gossiping)
+    - group conditions (qualified counts, thresholds)
+    - spawn point (is there a valid position)
+
+  Values are colour-coded the same way as the overhead icons.
+  Hover any row to read the full explanation of that condition.
+
+
+5. SETTINGS SCREEN (hotkey I)
+----------------------------------------------------------------
+
+  Tab 1: Switches
+
+    Master switch              turns everything off
+    Villager overhead info     the three icons
+    Show bound beds            cyan lines
+    Show golem spawn area      yellow box
+    Show mob panic lines       orange lines
+    Show golem detection box   purple box (huge, very transparent)
+
+    Language                   Auto / Simplified Chinese / English
+
+  Tab 2: Statistics
+
+    Recording since: day N, HH:MM
+    Golems spawned: N
+    Evaluations: N
+    Average rate: N per hour
+
+    Spawn failures (sorted by count) - which villager, what reason, how often
+    By reason - the same data merged
+
+    A "Reset statistics" button (this discards the accumulated data)
+
+  Tab 3: About
+
+    Author and version information
+
+
+6. CONFIG FILE
+----------------------------------------------------------------
+
+  Location: config/ironfarm.properties
+
+  Plain key=value, safe to edit by hand:
+
+    masterEnabled=true
+    overlayMaxDistance=32.0
+    locale=auto
+
+  Fault tolerance: a malformed line is skipped, never fatal. Distance values
+  outside a sane range are clamped to 1-512.
+
+
+7. SUPPORTED SCARING MOBS
+----------------------------------------------------------------
+
+  Grouped by panic radius, all supported:
+
+    Radius 8   Zombie, Husk, Drowned, Zombie Villager, Vex
+    Radius 10  Vindicator, Zoglin
+    Radius 12  Evoker, Illusioner, Ravager
+    Radius 15  Pillager  <- largest coverage
+
+  Verified NOT to scare villagers: Wither, Frostbite.
+  Mobs outside the table are ignored by default, so unrelated mobs do not
+  paint lines on the screen.
+
+
+8. NOTES PER MOB
+----------------------------------------------------------------
+
+  Zombie        Burns in daylight; shade it or trap it in water with a boat
+  Husk          Does not burn, good for open-air farms, rarer than zombies
+  Drowned       Does not burn underwater, good for underwater rooms
+  Zombie Villager  Curing it creates positive gossip in nearby villagers
+  Vex           Flies through walls and cannot be caged; poor long-term choice
+  Vindicator    High melee damage, will kill villagers; keep it separated
+  Evoker        Summons vexes and fangs; extremely dangerous, not recommended
+  Illusioner    Unobtainable in vanilla survival, command spawn only
+  Ravager       Tramples crops, heavy damage, cannot be contained in a boat
+  Pillager      You MUST break its crossbow first, or it kills villagers
+                and golems. Does not burn in daylight.
+  Zoglin        Spawns only in the Nether; needs a portal or spawn egg
+
+
+9. KNOWN LIMITATIONS
+----------------------------------------------------------------
+
+  - In multiplayer most icons will be grey question marks. This is by design;
+    the client genuinely cannot read those two fields.
+  - In singleplayer the real data is available and the icons are accurate.
+  - "Which villager spawned this golem" is inferred by searching for nearby
+    qualified villagers. Command-spawned or player-built golems record -1.
+  - Statistics persist to disk (autosaved every 30 s since 0.10.0).
+
+
+10. FAQ
+----------------------------------------------------------------
+
+Q: The icons are always grey question marks.
+A: That is expected on a multiplayer server. Test in a singleplayer world
+   if you want accurate results.
+
+Q: Right-clicking a villager does nothing.
+A: Check the master switch, and make sure the villager is within 48 blocks
+   (outside the scan radius there are no icons and no status screen).
+
+Q: No overhead icons at all.
+A: Check that "Villager overhead info" is enabled, and that villagers are
+   within 32 blocks (adjustable in the settings).
+
+Q: I cannot see the purple detection box.
+A: That box is 33x33x33 and only 0.18 opaque. Stand further back after
+   enabling "Show golem detection box".
+
+Q: The statistics stay at zero.
+A: Statistics rely on server events. Singleplayer works; on a multiplayer
+   server the client receives nothing, so this part is incomplete there.
+   The statistics tab shows an orange warning in that case.
+
+Q: Do statistics reset when I close the game?
+A: No, not since 0.10.0. They autosave every 30 seconds and also save when
+   you open the statistics tab. At most 30 seconds can be lost.
+
+================================================================
+4. Multi-version notes (from 0.31.0)
+================================================================
+
+This zip contains four jars. Install ONLY ONE, matching your game:
+
+  File                                  MC version  Loader
+  ------------------------------------  ----------  --------
+  ironfarm-fabric-1.21.1-0.31.0.jar     1.21.1      Fabric
+  ironfarm-neoforge-1.21.1-0.31.0.jar   1.21.1      NeoForge
+  ironfarm-fabric-26.3-0.31.0.jar       26.3        Fabric
+  ironfarm-neoforge-26.3-0.31.0.jar     26.3        NeoForge
+
+  Wrong loader  -> the game ignores it (log says mod not found)
+  Two of them   -> "Duplicate mod id: ironfarm", the game will not start
+
+================================================================
+5. Feature differences between the four builds
+================================================================
+
+The judging logic (who can spawn a golem, and why not) is IDENTICAL
+across all four builds - it is one pure-Java engine with no Minecraft
+dependency.
+
+The UI and visuals differ slightly:
+
+  Feature               1.21.1          26.3
+  --------------------  --------------  ------------------------------
+  Settings / status     yes             yes
+  Statistics            yes             yes
+  About + full doc      yes             yes
+  Overhead markers      icon atlas      text symbols (check/cross/skull/note)
+  Bed / panic lines     yes             yes
+  Spawn box + points    yes             yes
+  Golem detect box      yes             yes
+
+  26.3 uses text symbols for overhead markers instead of the icon atlas,
+  because 26.3 rewrote the GUI pipeline (GuiGraphics -> GuiGraphicsExtractor)
+  and the official Gizmos API is the supported way to draw in world space.
+  Upside: markers are never occluded by blocks. Downside: not the original
+  pixel-icon look.
+
+================================================================
+6. Installation
+================================================================
+
+1. Install the loader for your version (Fabric Loader / NeoForge)
+2. Put the matching single jar into the mods folder
+3. Launch and press I to open settings
+
+  1.21.1 needs Java 21
+  26.3   needs Java 25
+
+Config and stats files:
+  .minecraft/versions/<version>/config/ironfarm.properties
+  .minecraft/versions/<version>/config/ironfarm-stats.txt
+
+================================================================
+7. Item destruction statistics (new in 0.36.0)
+================================================================
+
+[What it does] When a hopper points at a white wool block, everything
+inside that hopper is destroyed.
+
+  Both conditions must hold:
+    1. The block is WHITE WOOL (minecraft:white_wool). Other colours do nothing.
+    2. It is the block the hopper OUTPUTS to:
+         facing down  -> the block below
+         facing up    -> the block above
+         facing sideways -> that side
+
+  Clearing: checked and emptied every 8 ticks (the whole hopper at once,
+            regardless of stack or type count).
+
+            Why 8 ticks:
+              A vanilla hopper picks up one item every 8 ticks
+              (MOVE_ITEM_SPEED = 8). Matching the clear period to that
+              interval means nothing ever piles up - whatever was picked up
+              is gone by the next check, leaving 1-2 items at most.
+
+            Shorter than 8: no less backlog (it is already minimal), just
+            wasted scanning - that is what froze the game with an accelerator.
+            Longer than 8: items visibly accumulate (0.37.0 cleared every
+            2 picks = 16 ticks, which is exactly that problem).
+
+[Statistics] Destroyed items are listed at the bottom of the Statistics tab
+under the heading "Items destroyed".
+
+  It is visually separated from the golem numbers above because it measures
+  something entirely different:
+    above: how much iron the farm produced
+    below: what the hopper destroyed
+
+  Metrics:
+    Total destroyed (items)   sum of all items
+    Destroy rate (items/hour) estimated from the recording duration
+    By item type              total and per-hour for each item
+
+[Notes]
+  · Singleplayer only. On a multiplayer server the client cannot read hopper
+    contents, so this silently does nothing.
+  · Rates use in-game time, so pausing does not drag the rate down.
+  · "Clear statistics" resets these counters too.
+
+[Why this exists]
+  Pointing a hopper at white wool is a common way to void overflow so the
+  farm does not clog. But you cannot see WHAT was voided. This panel tells
+  you exactly how much (and of what) went into the void - which is how you
+  notice that your iron ingots are being destroyed by accident.
+
+================================================================
+8. Reading the statistics page (updated in 0.43.0)
+================================================================
+
+[Recorded for] replaces the old "recording started at" timestamp.
+
+  It used to show "Day 17 21:23" - the game time recording began,
+  leaving you to work out the difference yourself. Now it shows
+  "Xh Ym" directly.
+
+  Note: this accumulates in GAME time, so a tick accelerator speeds
+  it up too - which is what you want, since the production figures
+  accelerate with it.
+
+[Item names] in the destruction panel now use the real localised
+  item name ("Iron Ingot") instead of the raw ID "iron_ingot".
+
+[The two panels are now aligned]
+  Up to 0.42.0 the golem stats and the destruction stats used
+  different time bases (72000 vs 1000 ticks per hour - a 72x gap)
+  and started counting at different moments, so "iron produced"
+  and "iron destroyed" could not be compared at all.
+
+  From 0.43.0 both use 72000 ticks = 1 hour, and both start when
+  you press "start recording" - so they are directly comparable.

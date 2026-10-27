@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "id": "ironfarm",
+  "version": "${version}",
+  "name": "Iron Farm Design Wheelchair",
+  "description": "Shows whether each villager can spawn an iron golem, why not, and what the farm is producing. Supports every mob that can scare a villager.",
+  "authors": [
+    "黑山大叔"
+  ],
+  "contact": {
+    "homepage": "https://space.bilibili.com/19428259"
+  },
+  "license": "MIT",
+  "icon": "assets/ironfarm/icon.png",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "com.heishandashu.ironfarm.fabric263.IronFarmClient"
+    ]
+  },
+  "mixins": [
+    "ironfarm.mixins.json"
+  ],
+  "accessWidener": "ironfarm.accesswidener",
+  "depends": {
+    "fabricloader": ">=${mc26_loader_version}",
+    "minecraft": "~${mc26_version}",
+    "java": ">=25",
+    "fabric-api": "*"
+  }
+}

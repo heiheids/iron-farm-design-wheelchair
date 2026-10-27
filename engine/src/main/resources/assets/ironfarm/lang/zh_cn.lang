@@ -1,0 +1,282 @@
+# 刷铁机设计轮椅 - 简体中文语言文件
+# 格式：key=value，UTF-8，一行一条，# 开头为注释
+# 请勿手工改动 key 的拼写，只改等号右边的内容。
+
+# ---- 通用 ----
+ironfarm.name=刷铁机设计轮椅
+ironfarm.author=作者：黑山大叔
+ironfarm.homepage=主页：https://space.bilibili.com/19428259
+ironfarm.yes=是
+ironfarm.no=否
+ironfarm.pass=满足
+ironfarm.fail=不满足
+ironfarm.unknown=无法判定
+ironfarm.seconds=秒
+ironfarm.minutes=分钟
+ironfarm.ticks=刻
+ironfarm.blocks=格
+
+# ---- 条件名称 ----
+ironfarm.cond.adult=成年村民
+ironfarm.cond.adult.desc=婴儿村民不睡觉、不参与召唤。
+ironfarm.cond.slept=20 分钟内睡过觉
+ironfarm.cond.slept.desc=最近 24000 刻（20 分钟）内躺到过床上。这是最容易卡住的一条，多数机器只在夜里工作。
+ironfarm.cond.no_golem=30 秒内未发现铁傀儡
+ironfarm.cond.no_golem.desc=村民每 10 秒扫描一次以自己为中心、上下左右各 16 格的立方体。只要扫到过一只铁傀儡，就要再等 30 秒。
+ironfarm.cond.no_summon=30 秒内附近无村民召唤成功
+ironfarm.cond.no_summon.desc=以自己为中心、上下左右各 10 格内，30 秒内没有村民成功召唤过铁傀儡。
+ironfarm.cond.panicking=处于恐吓状态
+ironfarm.cond.panicking.desc=旁边有对村民敌对的怪物（僵尸、掠夺者等），而且距离够、视线通。
+ironfarm.cond.gossiping=处于闲聊状态
+ironfarm.cond.gossiping.desc=村民之间正在闲聊（交易、治愈、攻击或杀死村民都会产生闲聊）。
+ironfarm.cond.panic_group=恐吓人数达标
+ironfarm.cond.panic_group.desc=10 格内至少 3 名合格村民一起处于恐吓状态。
+ironfarm.cond.gossip_group=闲聊人数达标
+ironfarm.cond.gossip_group.desc=10 格内至少 5 名合格村民，且其中至少一人在闲聊。
+ironfarm.cond.spawn_point=有合法生成点
+ironfarm.cond.spawn_point.desc=以村民为中心 17×13×17 的范围内，至少有一格满足全部生成要求。
+
+# ---- 失败原因 ----
+ironfarm.reason.not_adult=不是成年村民
+ironfarm.reason.never_slept=从来没有睡过觉
+ironfarm.reason.sleep_expired=睡觉已超过 20 分钟
+ironfarm.reason.golem_detected=30 秒内侦测到过铁傀儡
+ironfarm.reason.near_summon=30 秒内附近有村民召唤成功
+ironfarm.reason.not_panicking=没有处于恐吓状态
+ironfarm.reason.not_gossiping=没有处于闲聊状态
+ironfarm.reason.panic_group_too_small=恐吓的村民不足 3 人
+ironfarm.reason.gossip_group_too_small=闲聊的村民不足 5 人
+ironfarm.reason.no_spawn_point=17×13×17 范围内没有合法生成点
+ironfarm.reason.spawn_area_unloaded=生成范围所在区块未加载
+ironfarm.reason.chunk_unloaded=村民所在区块未加载
+ironfarm.reason.data_missing=数据缺失
+
+# ---- 生成点拒绝原因 ----
+ironfarm.spawn.reject.no_surface=这一列没有可站立的面
+ironfarm.spawn.reject.no_full_top=下方方块没有完整的上表面
+ironfarm.spawn.reject.full_block_above=生成位置上方的 3 格里有完整方块
+ironfarm.spawn.reject.rail=生成位置上有铁轨
+ironfarm.spawn.reject.powered=生成位置被红石信号充能
+ironfarm.spawn.reject.water_above=生成位置上方是水
+ironfarm.spawn.reject.entity_collision=生成位置上已经有实体占位
+
+# ---- 界面：村民状态页 ----
+ironfarm.gui.villager_status=村民状态
+ironfarm.gui.villager_status.title=村民状态（#%s）
+ironfarm.gui.villager_status.position=位置：%s
+ironfarm.gui.villager_status.summary=总判定：%s
+ironfarm.gui.villager_status.farm_ready_panic=恐吓路径可以刷
+ironfarm.gui.villager_status.farm_ready_gossip=闲聊路径可以刷
+ironfarm.gui.villager_status.not_ready=还不能刷
+ironfarm.gui.villager_status.individual=个体条件
+ironfarm.gui.villager_status.group=群体条件
+ironfarm.gui.villager_status.spawn=生成点
+ironfarm.gui.villager_status.participants=恐吓合格人数：%s／闲聊合格人数：%s
+ironfarm.gui.villager_status.bed=绑定的床：%s
+ironfarm.gui.villager_status.no_bed=没有绑定床
+ironfarm.gui.villager_status.value=当前 %s，门槛 %s
+
+# ---- 界面：设置页 ----
+ironfarm.gui.settings=刷铁机设计轮椅 · 设置
+ironfarm.gui.settings.master=模组总开关
+ironfarm.gui.settings.master.desc=关闭后头顶图标、线条、统计全部停止。
+ironfarm.gui.settings.overlay=村民头顶信息显示
+ironfarm.gui.settings.overlay.desc=在村民头顶显示三个图标：条件是否具备、是否恐吓、闲聊基础是否具备。
+ironfarm.gui.settings.bed_lines=显示村民绑定的床
+ironfarm.gui.settings.bed_lines.desc=用彩色线条连接村民与它绑定的床。
+ironfarm.gui.settings.spawn_box=显示铁傀儡可刷范围
+ironfarm.gui.settings.spawn_box.desc=用矩形框标出 17×13×17 的可刷范围。
+ironfarm.gui.settings.panic_lines=显示僵尸恐吓连线
+ironfarm.gui.settings.panic_lines.desc=用彩色线条连接僵尸与被它吓到的村民。距离不够生效的线画成虚线。
+ironfarm.gui.settings.golem_box=显示傀儡检测范围
+ironfarm.gui.settings.golem_box.desc=用矩形框标出村民每 10 秒扫描的 33×33×33 侦测范围。
+ironfarm.gui.settings.max_distance=头顶图标显示距离
+ironfarm.gui.settings.line_distance=线条显示距离
+ironfarm.gui.settings.language=语言
+ironfarm.gui.settings.language.auto=自动
+ironfarm.gui.settings.advanced=高级判定参数
+ironfarm.gui.settings.advanced.panic_group=恐吓参与者必须自身恐慌
+ironfarm.gui.settings.advanced.gossip_group=闲聊参与者必须自身闲聊
+ironfarm.gui.settings.on=开
+ironfarm.gui.settings.off=关
+
+# ---- 界面：统计页 ----
+ironfarm.gui.stats=统计信息
+ironfarm.gui.stats.start=开始记录
+ironfarm.gui.stats.spawned=铁傀儡累计数量
+ironfarm.gui.stats.attempts=判定次数（已弃用）
+ironfarm.gui.stats.rate=铁傀儡刷出（只／小时）
+ironfarm.gui.stats.failures=刷新失败
+ironfarm.gui.stats.failure_row=%s 号村民：%s（%s 次）
+ironfarm.gui.stats.no_failures=暂无失败记录
+ironfarm.gui.stats.by_reason=按原因统计
+ironfarm.gui.stats.reason_row=%s：%s 次
+ironfarm.gui.stats.reset=清空统计
+ironfarm.gui.stats.close=关闭
+
+# ---- 恐吓源：生物名称 ----
+# 任何能吓到村民的生物都在这里有一行。半径数字必须与引擎里 ScaryMob 一致。
+ironfarm.mob.zombie=僵尸
+ironfarm.mob.zombie.advice=半径 8 格。最常用的恐吓源。白天会烧死，必须遮光或用船固定在水里。
+ironfarm.mob.husk=尸壳
+ironfarm.mob.husk.advice=半径 8 格。白天不烧，比僵尸更适合露天机器，但没有僵尸常见。
+ironfarm.mob.drowned=溺尸
+ironfarm.mob.drowned.advice=半径 8 格。水里不烧，常被用在水下机房。
+ironfarm.mob.zombie_villager=僵尸村民
+ironfarm.mob.zombie_villager.advice=半径 8 格。注意：治愈它会让附近村民产生正面闲聊。
+ironfarm.mob.vex=恼鬼
+ironfarm.mob.vex.advice=半径 8 格。会穿墙飞行，无法用方块关住，不适合做长期恐吓源。
+ironfarm.mob.vindicator=卫道士
+ironfarm.mob.vindicator.advice=半径 10 格。近战伤害高，会杀死村民，必须隔开。
+ironfarm.mob.evoker=唤魔者
+ironfarm.mob.evoker.advice=半径 12 格。会召唤恼鬼和尖牙，极度危险，不建议使用。
+ironfarm.mob.illusioner=幻术师
+ironfarm.mob.illusioner.advice=半径 12 格。原版生存无法自然获得，只能指令生成。
+ironfarm.mob.ravager=劫掠兽
+ironfarm.mob.ravager.advice=半径 12 格。会撞坏作物、造成大量伤害，且无法用船固定。
+ironfarm.mob.pillager=掠夺者
+ironfarm.mob.pillager.advice=半径 15 格，是覆盖范围最大的一种。必须先卸掉弩，否则会射杀村民和铁傀儡；且白天不烧。
+ironfarm.mob.zoglin=僵尸疣猪兽
+ironfarm.mob.zoglin.advice=半径 10 格。只在下界生成，主世界需要靠传送或刷怪蛋。
+ironfarm.mob.wither=凋灵
+ironfarm.mob.wither.advice=源码已核实：村民不会被凋灵吓到，它不构成恐吓源。不能用来刷铁。
+ironfarm.mob.frostbite=霜冻
+ironfarm.mob.frostbite.advice=1.21.1 的恐慌半径表里没有霜冻，不构成恐吓源。它只会把村民变成僵尸村民。
+ironfarm.mob.custom=模组生物
+ironfarm.mob.custom.advice=该生物不在内置表里，半径由整合包注册值决定。
+
+# ---- 恐吓连线状态 ----
+ironfarm.panic.line.active=正在恐吓
+ironfarm.panic.line.too_far=距离不够（还差 %s 格）
+ironfarm.panic.line.no_sight=视线被挡住
+ironfarm.panic.line.inferred_radius=半径未验证，按 %s 格估算
+ironfarm.panic.primary=主力恐吓源：#%s
+ironfarm.panic.idle_mob=#%s 没有吓到任何村民
+
+# ---- 头顶图标 ----
+ironfarm.overlay.condition_ok=条件具备
+ironfarm.overlay.condition_no=条件不足
+ironfarm.overlay.panic_yes=正在被恐吓
+ironfarm.overlay.panic_no=未被恐吓
+ironfarm.overlay.gossip_yes=具备闲聊基础
+ironfarm.overlay.gossip_no=不具备闲聊基础
+
+# ---- 快捷键与提示 ----
+ironfarm.key.category=刷铁机设计轮椅
+ironfarm.key.open_settings=打开设置
+ironfarm.key.open_stats=打开统计
+ironfarm.msg.settings_opened=已打开设置
+ironfarm.msg.no_villager_nearby=附近没有村民
+ironfarm.msg.spawn_detected=铁傀儡已刷出（#%s 号村民触发）
+ironfarm.msg.chunk_unloaded=村民所在区块未加载，暂时无法判定
+
+# ---- 界面通用（第三轮补充） ----
+ironfarm.gui.summary=总判定
+ironfarm.gui.not_ready=还不能刷
+ironfarm.gui.villager_status.trigger=触发状态
+ironfarm.gui.stats.failures_count=失败条目数
+ironfarm.gui.stats.villager_short=#%s
+ironfarm.gui.stats.failure_row2=%s（%s 次）
+ironfarm.gui.time_format=第 %s 天 %s
+# ---- 状态页补充（第七轮） ----
+ironfarm.gui.close=关闭
+ironfarm.gui.villager_gone=这个村民已经不存在了
+
+# ---- 设置页标签与关于（第八轮） ----
+ironfarm.gui.tab.switches=开关
+ironfarm.gui.tab.stats=统计
+ironfarm.gui.tab.about=关于
+ironfarm.gui.lang.zh_cn=简体中文
+ironfarm.gui.lang.en_us=English
+ironfarm.about.line1=把刷铁机的判定逻辑搬进游戏。
+ironfarm.about.line2=头顶图标一眼看出村民能不能刷，统计页告诉你卡在哪一步。
+ironfarm.about.version=版本 0.8.0（语言：%s）
+ironfarm.gui.stats.reset_confirm=确定清空？
+
+ironfarm.gui.stats.multiplayer_warning=多人游戏：客户端收不到服务端事件，产量统计不完整
+
+ironfarm.gui.stats.more_hidden=还有 %s 条未显示（窗口太小）
+
+# ---- 铁傀儡生命周期统计（0.22.0）----
+ironfarm.gui.stats.avg_leave=平均离开检测范围
+ironfarm.gui.stats.avg_leave.tip=铁傀儡刷出后，多久离开所有村民的检测范围。数值越小说明收集系统越灵敏；如果接近存活时长，说明傀儡可能卡在刷出点没动。
+ironfarm.gui.stats.avg_alive=平均存活时长
+ironfarm.gui.stats.avg_alive.tip=铁傀儡从出现到消失的平均时间。和上面一项对照看：离开范围远小于存活时长是正常的（掉下去被收走，最后在收集点被杀）；两者接近则说明傀儡一直没被收走。
+ironfarm.gui.stats.no_samples=暂无数据
+ironfarm.gui.stats.discarded=已剔除样本
+ironfarm.gui.stats.discarded.tip=这些铁傀儡在离开检测范围之前就消失了（多半是区块卸载，看不到它们了），无法判断真实时长，所以没有计入平均。数量大说明你离机器太远，或者加载范围太小。
+# ---- 铁锭产量估算（0.25.0）----
+ironfarm.gui.stats.ingots_per_hour=铁锭产量估算（个/小时）
+ironfarm.gui.stats.ingots_per_hour.tip=按「铁傀儡每小时产量 × 单只掉落期望」估算。铁傀儡固定掉落 3~5 个铁锭（均匀分布，期望 4 个）。这是估算值：掉落随机，样本少时会明显偏离；如果有傀儡被卡住或掉进虚空，实际会低于估算。
+
+# ---- 关于页：刷新条件速查（0.25.0）----
+ironfarm.about.conditions.title=铁傀儡刷新条件速查
+ironfarm.about.conditions.1=【两条路径】
+恐吓：看到对村民敌对的怪物，群体门槛 3 只，每 5 秒尝试一次
+闲聊：村民互相交谈，群体门槛 5 只，随交谈触发
+ironfarm.about.conditions.2=【个体条件，每个参与者都要满足】
+· 成年村民（婴儿没有睡眠记忆，自然不满足）
+· 最近 20 分钟（24000 刻）内真的在床上躺下过
+· 最近 30 秒内没有看到过铁傀儡
+ironfarm.about.conditions.3=【睡眠窗口】
+20 分钟就是一个完整昼夜，而且是滚动的。
+固定在船或矿车里的村民永远睡不着，这条必然失败。
+白天把村民关住不让回去睡觉的机器，会在 20 分钟后集体失效。
+ironfarm.about.conditions.4=【傀儡记忆】
+记忆有效期 599 刻（不是常见的 600）。
+侦测范围：以村民为中心，上下左右各 16 格的立方体（33×33×33）。
+扫描节奏：每 10 秒扫一次，只有扫到那一刻范围内有傀儡才记录。
+铁傀儡在村民 16 格内停留超过 30 秒，这只村民就会停止刷新。
+ironfarm.about.conditions.5=【群体计数】
+以发起者为中心，范围膨胀 10 格，最多数 5 只村民。
+这 5 个名额里，恐吓路径需要凑够 3 只合格的；
+闲聊路径门槛正好也是 5，所以必须 5 个名额全合格。
+ironfarm.about.conditions.6=【重要：参与者不需要恐慌】
+只有发起召唤的那一只需要看到怪物。
+其余村民只要「睡够了 + 没看到傀儡」就能参与。
+所以机器只需要让 3 只村民看到怪物，其余不用。
+ironfarm.about.conditions.7=【恐慌半径】
+8 格：僵尸、尸壳、溺尸、僵尸村民、恼鬼
+10 格：卫道士、僵尸疣猪兽
+12 格：唤魔者、幻术师、劫掠兽
+15 格：掠夺者（覆盖范围最大）
+ironfarm.about.conditions.8=【会被挡住的条件】
+视线必须通畅：玻璃、台阶不挡，完整方块会挡住。
+凋灵和霜冻不会让村民恐慌，很多攻略写错了。
+掠夺者必须先卸弩，否则会射杀村民和铁傀儡。
+ironfarm.about.conditions.9=【生成点】
+搜索范围：以村民为中心 17×13×17（水平各 8 格，垂直各 6 格）。
+单次召唤最多尝试 10 个随机位置，全不合法就白费一次。
+脚下必须能站人，上方要有 2 格空间，不能是液体。
+ironfarm.about.conditions.10=【不在条件里的东西】
+「附近村民 30 秒内未召唤傀儡」这条不存在，是常见误读。
+原版只有两个相关记忆：上次睡觉时间、最近看到过铁傀儡。
+1.16 之后不再要求村民有职业，也不要求村庄床位数量。
+ironfarm.about.conditions.src=详细说明见工程根目录《铁傀儡刷新条件-详解.txt》，数据来自 1.21.1 字节码反编译。
+# ---- 单位澄清（0.26.0）----
+ironfarm.gui.stats.rate.tip=每小时能刷出多少只铁傀儡。注意这是**速率**，不是累计数量。
+ironfarm.gui.stats.ingots_total=铁锭累计估算（个）
+ironfarm.gui.stats.ingots_total.tip=从开始记录到现在，一共有多少铁锭。算法：刷出数量 × 4。铁傀儡固定掉 3~5 个铁锭（均匀分布，期望 4）。这个数可以和你背包里的实际收获直接对比。
+ironfarm.about.doc_missing=条件文档读取失败。请确认 jar 内的 assets/ironfarm/conditions/ 目录完整。
+
+ironfarm.gui.stats.spawned.tip=从开始记录到现在，累计刷出多少只铁傀儡。这是累计量，不是速率。
+
+
+# ---- 实物统计（漏斗销毁的物品）----
+ironfarm.gui.items.section=实物统计
+ironfarm.gui.items.total=累计销毁（个）
+ironfarm.gui.items.total.tip=漏斗指向白色羊毛块时销毁掉的全部物品数量之和。
+ironfarm.gui.items.per_hour=销毁速率（个/小时）
+ironfarm.gui.items.per_hour.tip=按累计数量与记录时长估算的平均每小时销毁量。
+ironfarm.gui.items.unit_per_hour=个/小时
+ironfarm.gui.items.by_item=按物品种类
+ironfarm.gui.items.none=（还没有销毁记录）
+ironfarm.gui.items.none.tip=把漏斗指向白色羊毛块后，漏斗里的物品会被销毁并在此统计。
+ironfarm.gui.items.rule=白色羊毛：销毁漏斗物品
+
+ironfarm.gui.settings.wool_hopper=白色羊毛漏斗销毁
+
+ironfarm.gui.stats.elapsed=已记录时长
+ironfarm.gui.stats.elapsed.tip=按游戏时间累计，开游戏加速时会同步加速
+ironfarm.gui.stats.elapsed_format={0} 小时 {1} 分
+ironfarm.gui.stats.elapsed_zero=0 分

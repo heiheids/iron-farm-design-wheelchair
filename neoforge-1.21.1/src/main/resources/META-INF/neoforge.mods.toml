@@ -1,0 +1,34 @@
+modLoader = "javafml"
+loaderVersion = "[4,)"
+license = "MIT"
+issueTrackerURL = "https://space.bilibili.com/19428259"
+
+[[mods]]
+modId = "ironfarm"
+version = "${version}"
+displayName = "Iron Farm Design Wheelchair"
+authors = "黑山大叔"
+description = '''
+Shows whether each villager can spawn an iron golem, why not, and what the farm is producing.
+Supports every mob that can scare a villager.
+'''
+
+[[mixins]]
+config = "ironfarm.mixins.json"
+
+[[accessTransformers]]
+file = "META-INF/accesstransformer.cfg"
+
+[[dependencies.ironfarm]]
+modId = "neoforge"
+type = "required"
+versionRange = "[21.1.0,)"
+ordering = "NONE"
+side = "CLIENT"
+
+[[dependencies.ironfarm]]
+modId = "minecraft"
+type = "required"
+versionRange = "[1.21.1,1.22)"
+ordering = "NONE"
+side = "CLIENT"

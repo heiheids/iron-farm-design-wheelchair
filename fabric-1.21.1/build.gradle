@@ -1,0 +1,110 @@
+plugins {
+    // 1.21.11 及更早的版本仍是混淆的，必须用 remap 版插件 + Mojang mappings
+    id 'net.fabricmc.fabric-loom-remap' version "${loom_version}"
+    id 'java'
+}
+
+version = project.findProperty('mod_version') ?: '0.1.0'
+group = 'com.heishandashu'
+
+base {
+    archivesName = "ironfarm-fabric-${minecraft_version}"
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${minecraft_version}"
+    mappings loom.officialMojangMappings()
+
+    modImplementation "net.fabricmc:fabric-loader:${loader_version}"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${fabric_api_version}"
+
+    // 判定引擎：纯 Java 模块，不含任何 Minecraft 类
+    implementation project(':engine')
+    // 打进最终 jar，玩家只需要放一个文件
+    include project(':engine')
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = 21
+}
+
+// ⚠ engine 的 resources 目录是 :engine:langToJson 的输出，
+//    而 fabric 模块把它当 srcDir 用 —— 必须显式声明依赖，
+//    否则 Gradle 9 会因为"隐式依赖"直接拒绝构建：
+//      "uses this output of task :engine:langToJson
+//       without declaring an explicit or implicit dependency"
+tasks.named('processResources') {
+    dependsOn ':engine:langToJson'
+}
+
+processResources {
+    inputs.property 'version', project.version
+    inputs.property 'minecraft_version', minecraft_version
+    inputs.property 'loader_version', loader_version
+    inputs.property 'fabric_api_version', fabric_api_version
+
+    filesMatching('fabric.mod.json') {
+        expand(
+                version: project.version,
+                minecraft_version: minecraft_version,
+                loader_version: loader_version,
+                fabric_api_version: fabric_api_version
+        )
+    }
+}
+
+// engine 的 lang/icon 资源必须进同一个 jar
+sourceSets {
+    main {
+        resources {
+            srcDir rootProject.file('engine/src/main/resources')
+        }
+    }
+}
+
+// AccessWidener：用来读 Villager.lastGossipTime（private 字段）。
+// 原版没有"正在闲聊"的状态，只有这个时间戳，不读它就只能猜。
+//
+// 服务端运行配置：用来在无头环境验证"模组能被加载器识别、不崩"。
+// 本机跑不起客户端（LWJGL/SDL 初始化失败），服务端是唯一能实际启动的验证手段。
+loom {
+    accessWidenerPath = file('src/main/resources/ironfarm.accesswidener')
+
+    // ==================================================================
+    // Mixin refmap —— 没有它，@Shadow 会在运行时崩
+    // ==================================================================
+    //
+    // 崩溃现象（用户："打开漏斗崩溃了"，其实是"打开交易界面"）：
+    //     InvalidMixinException: @Shadow field field_2776 was not located
+    //     in the target class net.minecraft.class_492. No refMap loaded.
+    //
+    // 原因：
+    //   源码里写的是 Mojang 名 @Shadow protected int leftPos;
+    //   而运行时 jar 里的字段叫 field_2776（intermediary 名）。
+    //   Mixin 需要一张 refmap（named → intermediary 的对照表）才能把
+    //   leftPos 翻译成 field_2776。没这张表，它在目标类里找 "leftPos"，
+    //   当然找不到 → 崩溃。
+    //
+    //   为什么之前一直没崩：MerchantScreenMixin 是 @Inject 到 init()，
+    //   只有**打开交易界面**时那个类才会被加载/变换。
+    //   平时不碰村民交易就永远走不到，所以这个问题藏了很久。
+    //
+    // Loom 会自动生成 refmap 并写进 jar，只要在 mixin 配置里声明 refmap 名。
+    runs {
+        server {
+            server()
+            runDir 'run-server'
+            vmArg '-Dfabric.log.level=info'
+        }
+    }
+}

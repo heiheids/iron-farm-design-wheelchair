@@ -1,0 +1,478 @@
+================================================================
+How villagers spawn iron golems - full conditions (Java 1.21.1, verified)
+================================================================
+
+Author: Heishan Dashu
+Homepage: https://space.bilibili.com/19428259
+
+Applies to: Minecraft Java Edition 1.14.3 through 1.21.1 (26.x unverified)
+Source: bytecode decompiled from the official 1.21.1 obfuscated jar with javap,
+not paraphrased from the wiki.
+
+NOTE: how this differs from common online sources
+----------------------------------------------------------------
+Several claims circulating online (including some wiki wording) are inaccurate.
+Everything here follows the bytecode, and section 7 lists the differences.
+
+Three things worth knowing up front:
+
+  1. There is NO separate condition "no nearby villager summoned a golem in 30s"
+     That comes from misreading the golem memory as a summon memory. See item 1 in section 7.
+
+  2. The golem memory lasts 599 ticks, not 600
+     Being off by one flips the result at exactly the 30 second boundary.
+
+  3. Participants do NOT need to be panicking
+     Only the villager that starts the attempt does. This directly affects farm design.
+
+
+================================================================
+1. Overview: two paths
+================================================================
+
+There are two completely independent paths:
+
+  Path          How it triggers                   Group     Attempt rate
+  ------------  --------------------------------  --------  ------------------
+  Panic         A villager sees a hostile mob     >= 3      every 100 ticks (5 s)
+  Gossip        Villagers talk (gossip present)   >= 5      on conversation
+
+* Iron farms mostly use panic: lower threshold (3 vs 5), fixed 5 second cadence.
+* Both paths share exactly the same individual conditions.
+
+
+================================================================
+2. Conditions every individual villager must meet
+================================================================
+
+These apply to every participant, not just the initiator.
+
+----------------------------------------------------------------
+Condition 1: must be an adult villager
+----------------------------------------------------------------
+
+  Baby villagers never sleep and never participate.
+
+  Vanilla actually has no explicit adult check: a baby has no LAST_SLEPT memory,
+  so condition 2 fails naturally. It is listed separately in the UI because
+  "this is just a baby" is easier to understand than "has never slept".
+
+----------------------------------------------------------------
+Condition 2: slept within the last 20 minutes
+----------------------------------------------------------------
+
+  Window: 24000 ticks = 20 minutes = one full day cycle
+  Source: ldc2_w 24000l in Villager.golemSpawnConditionsMet
+
+  WARNING This is the easiest condition to fail.
+
+     The villager must actually have lain down in a bed. A bed merely being
+     nearby does not count.
+
+     Farms that keep villagers caged and never let them return to a bed go dead
+     after 20 minutes. This is the real reason behind many "my farm suddenly
+     stopped working" reports.
+
+  Common misconceptions:
+
+     "once it has slept, it is fine"          -> wrong, the window keeps rolling
+     "just put a bed nearby"                  -> wrong, it must actually lie down
+     "name tag / boat it in place"            -> a villager in a boat cannot sleep, so this always fails
+
+----------------------------------------------------------------
+Condition 3: has not "seen" an iron golem in the last 30 seconds
+----------------------------------------------------------------
+
+  Memory: GOLEM_DETECTED_RECENTLY
+  Duration: 599 ticks (NOT 600)
+  Source: setMemoryWithExpiry with 599L in GolemSensor.golemDetected
+
+  DETECTION RANGE
+
+     A cube of 16 blocks in each axis (X/Y/Z) centred on the villager, not a sphere.
+     That is 33 x 33 x 33 = 35937 blocks.
+     Source: Sensor.TARGETING_RANGE = 16 combined with a bounding box inflate.
+
+  SCAN RATE
+
+     Once every 200 ticks (10 seconds).
+     Source: the constructor argument 200 in GolemSensor.
+
+  IMPORTANT The memory is only written if a golem is inside the cube at the
+  moment the scan runs. That means:
+
+     - a golem lingering for 10+ seconds will almost certainly be recorded
+     - a golem passing through quickly may not be recorded depending on timing
+
+  PRACTICAL IMPACT
+
+     This is why golems must leave the spawn area quickly.
+
+     If a golem stays within 16 blocks for more than 30 seconds, that villager
+     stops spawning for the next 599 ticks, which caps your rates directly.
+
+  NOTE This is "saw it yourself", not "someone nearby summoned one". See section 7 item 1.
+
+
+================================================================
+3. Group condition: participant counting
+================================================================
+
+----------------------------------------------------------------
+Counting rules
+----------------------------------------------------------------
+
+  Range: centred on the initiator, bounding box inflated by 10 blocks
+         Source: the inflate(10, 10, 10) call in spawnGolemIfNeeded
+
+  Slot limit: 5
+         Source: Stream.limit(5) in the same method
+
+  WARNING This limit of 5 has a very important consequence:
+
+     The gossip threshold is also exactly 5, so ALL FIVE slots must qualify.
+     One bad villager is enough to fail the check.
+
+     The panic threshold is 3, so only 3 of the 5 slots need to qualify.
+
+----------------------------------------------------------------
+KEY FACT: participants do not need to be panicking
+----------------------------------------------------------------
+
+  This is one of the most important conclusions here, and it is widely
+  misreported in guides.
+
+  The vanilla logic is:
+
+    1. VillagerPanicTrigger fires every 100 ticks and first counts how many
+       villagers are panicking (threshold 3).
+    2. Once 3 are panicking, it calls wantsToSpawnGolem on each nearby villager.
+    3. wantsToSpawnGolem only checks two things:
+         - LAST_SLEPT is within 24000 ticks
+         - there is no GOLEM_DETECTED_RECENTLY memory
+    4. Any villager meeting those two conditions participates, whether or not
+       it is panicking itself.
+
+  IMPACT ON FARM DESIGN
+
+     You only need 3 villagers that can see the mob. Everyone else just needs
+     to have slept and not seen a golem. This makes farms much easier to build.
+
+
+================================================================
+4. Panic path: which mobs scare villagers
+================================================================
+
+The check (VillagerPanicTrigger.canStillUse):
+
+  1. The mob must be hostile to villagers (see the table below)
+  2. It must be within the panic radius (spherical, foot centre to foot centre)
+  3. Line of sight must be clear (no blocks in the way)
+
+----------------------------------------------------------------
+Panic radii (all verified against bytecode)
+----------------------------------------------------------------
+
+  Radius   Mobs
+  -------  ----------------------------------------------------------
+  8        zombie, husk, drowned, zombie villager, vex
+  10       vindicator, zoglin
+  12       evoker, illusioner, ravager
+  15       pillager    <<-- largest coverage
+
+----------------------------------------------------------------
+Mobs that do NOT scare villagers (verified)
+----------------------------------------------------------------
+
+  Wither     - not present in ACCEPTABLE_DISTANCE_FROM_HOSTILES
+  Frostbite  - not in the hostile list
+
+  Many guides get these two wrong.
+
+----------------------------------------------------------------
+Line of sight (the most commonly missed condition)
+----------------------------------------------------------------
+
+  Even with glass, slabs or trapdoors between them, the sight check passes as
+  long as the collision shape lets the ray through.
+
+  That means:
+
+    glass: does not block, fine to use
+    slabs: half height, usually fine
+    full blocks: block the ray, the villager cannot see the mob -> no panic
+
+  WARNING This is the most common reason for "the mob is right there but the
+  villager is not panicking".
+
+----------------------------------------------------------------
+Notes per mob
+----------------------------------------------------------------
+
+  Zombie
+    Burns in daylight, must be shaded, or trapped in water / a boat
+    Will attack villagers, needs separation
+
+  Husk
+    Does not burn, good for open-air farms
+    Rarer than zombies (desert only)
+
+  Drowned
+    Does not burn underwater, good for underwater rooms
+    Note it can also be pushed away by water streams
+
+  Zombie villager
+    Curing it creates positive gossip nearby, which may accidentally trigger
+    the gossip path and skew your statistics
+
+  Vex
+    Flies through walls, cannot be caged
+    Not a good long-term choice
+
+  Vindicator
+    High melee damage, will kill villagers outright
+    Must be fully separated by blocks
+
+  Evoker
+    Summons vexes and fangs
+    Extremely dangerous and hard to control, not recommended
+
+  Illusioner
+    Unobtainable in vanilla survival, command spawn only
+
+  Ravager
+    Tramples crops, heavy damage
+    Cannot be contained in a boat, it walks out
+
+  Pillager
+    You MUST remove its crossbow first, or it kills villagers and golems
+    Does not burn in daylight; best pick for 15 block coverage
+
+  Zoglin
+    Spawns only in the Nether
+    Needs a portal or a spawn egg in the overworld
+
+
+================================================================
+5. Spawn point: where the golem appears
+================================================================
+
+  Search volume: 17 x 13 x 17 centred on the villager
+                 horizontally +/- 8 blocks, vertically +/- 6 blocks
+                 Source: the 8 6 arguments to SpawnUtil.trySpawnMob
+
+  Attempts: up to 10 random positions per summon
+
+  NOTE Before 1.19 (22w12a) the volume was 16x13x16.
+       That change invalidated some spawn spots on older farms.
+
+----------------------------------------------------------------
+What makes a single position valid
+----------------------------------------------------------------
+
+  1. The block below must have a standable collision surface
+  2. The golem's own body space (1.4 blocks) must be free
+  3. There must be 2 blocks of headroom
+  4. It must not be liquid or inside a wall
+
+  WARNING The most common causes of "looks empty but nothing spawns":
+
+     only 1.5 blocks of headroom (slab + half-slab stacking)
+     trapdoors or fences underfoot (collision surface too low)
+     the position being inside water (water is not a standable surface)
+
+
+================================================================
+6. Full decision flow (pseudocode)
+================================================================
+
+  every 100 ticks (5 seconds), for each villager:
+
+    if the villager is not panicking:
+        continue                    # only the initiator needs this
+
+    if panicking villagers nearby is less than 3:
+        continue
+
+    # count participants
+    count = 0
+    for each villager v within 10 blocks (at most 5):
+        if v is adult
+           and v slept within 24000 ticks
+           and v has no GOLEM_DETECTED_RECENTLY memory:
+            count = count + 1
+
+    if count is less than 3:
+        continue
+
+    # try to spawn
+    for 10 attempts:
+        pick a random position inside 17x13x17
+        if the position is valid:
+            spawn an iron golem
+            break
+
+
+================================================================
+7. Corrections: where common sources are wrong
+================================================================
+
+----------------------------------------------------------------
+Correction 1: there is no "no nearby villager summoned in 30s" condition
+----------------------------------------------------------------
+
+  WHAT IS CLAIMED
+     "No nearby villager has summoned an iron golem in the last 30 seconds"
+     is one of the spawn conditions.
+
+  WHAT THE BYTECODE SAYS
+     Villager only tracks two relevant memories:
+       - LAST_SLEPT              (when it last slept)
+       - GOLEM_DETECTED_RECENTLY (when it last saw a golem)
+
+     There is no "RECENTLY_SUMMONED" or similar memory.
+
+  WHERE THE MISREADING COMES FROM
+     Most likely GOLEM_DETECTED_RECENTLY was read as "recently summoned".
+     It means "saw a golem", not "summoned a golem".
+
+  IMPACT
+     Because this condition does not exist:
+
+       a golem summoned by someone else still puts you on cooldown if you saw it
+       but that is still "seeing", not "summoning"
+
+----------------------------------------------------------------
+Correction 2: the golem memory is 599 ticks, not 600
+----------------------------------------------------------------
+
+  Bytecode: setMemoryWithExpiry with 599L in GolemSensor
+
+  Impact: implementing 600 flips the result at exactly the 30.00 second frame.
+          The practical effect is tiny (1 tick = 0.05 s) but the number must be right.
+
+----------------------------------------------------------------
+Correction 3: participants do not need to be panicking
+----------------------------------------------------------------
+
+  WHAT IS CLAIMED
+     Every villager participating in a summon must be panicking.
+
+  WHAT THE BYTECODE SAYS
+     VillagerPanicTrigger only counts panicking villagers to cross the
+     threshold of 3, then calls wantsToSpawnGolem on nearby villagers,
+     and that method only looks at sleep and golem memory.
+
+  Impact: farm design gets much simpler.
+
+          Only 3 villagers need to see the mob. The rest just need to have
+          slept and not seen a golem.
+
+----------------------------------------------------------------
+Correction 4: since 1.16, profession and work state are irrelevant
+----------------------------------------------------------------
+
+  1.14.3 to 1.15: panicking villagers also had to work and sleep
+  1.16 (20w19a) onward: no profession required, no recent-work requirement,
+                        and no village bed count requirement
+
+----------------------------------------------------------------
+Correction 5: the wither and frostbite cannot scare villagers
+----------------------------------------------------------------
+
+  Many guides list the wither as a hostile mob.
+
+  But WITHER is not in ACCEPTABLE_DISTANCE_FROM_HOSTILES, so it never causes
+  panic.
+
+
+================================================================
+8. Practical checklist
+================================================================
+
+When a farm is not spawning, check in this order (most likely first):
+
+  [ ] 1. Has the villager slept in the last 20 minutes?
+
+         Shade the farm, or provide beds so they can actually lie down.
+         A villager stuck in a boat or minecart can never sleep.
+
+  [ ] 2. Are at least 3 villagers panicking?
+
+         Use the skull icon in this mod: green means it is being scared.
+
+  [ ] 3. Is the mob close enough?
+
+         Zombie: within 8 blocks. Use the orange line in this mod:
+         solid = working, dashed = too far, dotted = sight blocked.
+
+  [ ] 4. Is line of sight clear?
+
+         No full blocks in between.
+
+  [ ] 5. Has the villager seen a golem recently?
+
+         If a golem is stuck within 16 blocks for over 30 seconds, that
+         villager stops spawning. Use the purple detection box in this mod:
+         a golem inside the box means cooldown is active.
+
+  [ ] 6. Is the spawn point valid?
+
+         Use the small crosses inside the yellow box in this mod:
+         no crosses means every position is invalid.
+
+  [ ] 7. Are there 3 participants?
+
+         At least 3 adult villagers within 10 blocks that have slept and have
+         not seen a golem.
+
+
+================================================================
+9. Direct consequences for farm design
+================================================================
+
+  1. Golems must leave the 16 block radius quickly
+
+     Otherwise that villager drops out of the pool for 30 seconds.
+     This is the most common reason for "why is my farm rate so low".
+
+  2. Only 3 villagers need to see the mob, the rest do not
+
+     Participants do not need to panic.
+
+  3. Beds are not strictly required, but sleeping is
+
+     Since 1.16 the bed count does not matter, but the villager must really
+     have slept within 20 minutes.
+
+  4. A pillager covers 15 blocks
+
+     This relaxes layout constraints a lot, but its crossbow must be removed.
+
+  5. The spawn volume is 17x13x17 with 10 attempts
+
+     An invalid position just burns one attempt, it does not fail the summon.
+     But if all 10 are invalid, the attempt is wasted.
+
+
+================================================================
+10. How this data was verified
+================================================================
+
+  Every number comes from javap decompilation of the official 1.21.1 jar,
+  and is covered by the 247 unit tests in the engine module, including
+  boundary values (599 vs 600, the 24000 boundary, corners of 17x13x17).
+
+  Relevant source files:
+
+    engine/src/main/java/.../version/VersionProfile.java   parameter profile
+    engine/src/main/java/.../rule/Condition.java           condition enum
+    engine/src/main/java/.../panic/ScaryMob.java           panic radius table
+    engine/src/main/java/.../eval/VillagerEvaluator.java   evaluation logic
+
+  If behaviour differs on 1.21.2+, it may be a version difference;
+  this document only covers up to 1.21.1.
+
+================================================================
+End of document
+================================================================

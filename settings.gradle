@@ -1,0 +1,25 @@
+// ⚠ settings.gradle 里必须先声明 Fabric 的插件仓库，否则 Loom 插件根本解析不到。
+// 默认只搜 Gradle Plugin Portal，而 Loom 只在 maven.fabricmc.net 上。
+
+pluginManagement {
+    repositories {
+        maven {
+            name = 'Fabric'
+            url = 'https://maven.fabricmc.net/'
+        }
+        maven {
+            name = 'NeoForged'
+            url = 'https://maven.neoforged.net/releases'
+        }
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+rootProject.name = 'ironfarm'
+
+include 'engine'
+include 'fabric-1.21.1'
+include 'neoforge-1.21.1'
+include 'fabric-26.3'
+include 'neoforge-26.3'

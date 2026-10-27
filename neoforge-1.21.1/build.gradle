@@ -1,0 +1,99 @@
+// NeoForge 1.21.1 模块。
+//
+// ⚠ 与 Fabric 模块的关键差异（不是改改包名的事）：
+//
+//   1. 插件不同：Fabric 用 Loom（fabric-loom-remap），NeoForge 用 ModDevGradle。
+//   2. 映射不同：Loom 用 officialMojangMappings；ModDevGradle 用 NeoForm 的
+//      official mappings —— 两者都是 Mojang 名，所以**适配层源码可以复用**，
+//      这是 1.21.1 跨加载器成本低的原因。
+//   3. 入口不同：Fabric 是 ClientModInitializer，
+//      NeoForge 是 @Mod + @EventBusSubscriber。
+//   4. 事件不同：Fabric 的 WorldRenderEvents / ClientTickEvents
+//      在 NeoForge 里对应 RenderLevelStageEvent / ClientTickEvent。
+//   5. Mixin 配置不同：NeoForge 用 mixins.json 但要在 mods.toml 里声明。
+
+plugins {
+    id 'java'
+    id 'net.neoforged.moddev' version '2.0.148'
+}
+
+version = project.findProperty('mod_version') ?: '0.1.0'
+group = 'com.heishandashu'
+
+base {
+    archivesName = "ironfarm-neoforge-${neoforge_mc_version}"
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = 21
+}
+
+neoForge {
+    version = project.neoforge_version
+
+    // 1.21.1 仍是混淆版本，ModDevGradle 会自动用 NeoForm 做反混淆。
+    // 产出的是 Mojang 名，与 Fabric 模块的 officialMojangMappings 一致。
+
+    runs {
+        client {
+            client()
+        }
+    }
+
+    mods {
+        ironfarm {
+            sourceSet sourceSets.main
+        }
+    }
+
+    // Access Transformer：对应 Fabric 的 accesswidener。
+    // 不声明的话 lastGossipTime / leftPos 等仍然是 protected，
+    // 采集层与 mixin 会编译失败。
+    accessTransformers.from 'src/main/resources/META-INF/accesstransformer.cfg'
+}
+
+dependencies {
+    // 判定引擎：纯 Java 模块，两个加载器共用同一份源码。
+    //
+    // ⚠ NeoForge 用 jarJar 把 engine 打进 META-INF/jarjar/，
+    //    与 Fabric 的 include（JiJ）等价 —— 玩家只需要放一个文件。
+    //
+    // ModDevGradle 2.x 里 jarJar 任务是自动创建的，不需要 enable()。
+    implementation project(':engine')
+    jarJar project(':engine')
+}
+
+// engine 的语言文件和图标资源必须进 jar
+sourceSets {
+    main {
+        resources {
+            srcDir rootProject.file('engine/src/main/resources')
+        }
+    }
+}
+
+// ⚠ engine 的 resources 目录是 :engine:langToJson 的输出，
+//    Gradle 9 要求显式声明依赖，否则报"隐式依赖"直接失败。
+tasks.named('processResources') {
+    dependsOn ':engine:langToJson'
+}
+
+processResources {
+    inputs.property 'version', project.version
+    inputs.property 'neoforge_version', neoforge_version
+    inputs.property 'neoforge_mc_version', neoforge_mc_version
+
+    filesMatching('META-INF/neoforge.mods.toml') {
+        expand(
+                version: project.version,
+                neoforge_version: neoforge_version,
+                neoforge_mc_version: neoforge_mc_version
+        )
+    }
+}

@@ -1,0 +1,275 @@
+Iron Farm Design Wheelchair - Technical Notes
+================================================================
+Version: 0.1.0
+Author: Heishan Dashu  https://space.bilibili.com/19428259
+================================================================
+
+
+1. ARCHITECTURE
+----------------------------------------------------------------
+
+Deliberately split into two modules:
+
+  ironfarm/
+    +-- engine/            pure Java, zero Minecraft dependencies
+    +-- (later) fabric/ neoforge/   loader adapters
+
+Why the engine is isolated (the single most important decision here):
+
+  1. Verifiability. The Minecraft client cannot start on this machine
+     (LWJGL/SDL fails to initialise). If the engine depended on the game,
+     every rule would only be "verified" by the fact that it compiles.
+     Isolated, all 98 assertions actually run without any game.
+
+  2. Cross-loader. Fabric and NeoForge share one evaluation
+     implementation, so the two builds can never disagree.
+
+  3. Cross-version. Every 1.21 - 26.3 parameter lives in VersionProfile,
+     so evaluation code never changes.
+
+The cost is interface indirection (BlockQuery / SightQuery) and one extra
+adapter layer. That cost is worth paying.
+
+
+2. PACKAGE LAYOUT
+----------------------------------------------------------------
+
+engine/src/main/java/com/heishandashu/ironfarm/engine/
+|
++-- model/
+|   +-- BlockPos3            integer position, no net.minecraft.core.BlockPos
+|   +-- VillagerSnapshot     a villager's evaluable state (the data contract)
+|
++-- version/
+|   +-- VersionProfile       every tunable for a version range
+|
++-- rule/
+|   +-- Condition            enum of evaluable conditions (lang key, group, path)
+|   +-- RuleResult           tri-state: PASS / FAIL / UNKNOWN
+|   +-- ReasonCodes          machine-readable failure codes
+|
++-- eval/
+|   +-- ConditionEngine      public entry point (stateless, pure)
+|   +-- VillagerEvaluator    per-rule implementation
+|   +-- VillagerReport       full report (3 icons + detail screen + attribution)
+|   +-- GroupPolicy          group-counting policy for both paths
+|   +-- GolemDetector        the "scan every 10 s, 30 s cooldown" state machine
+|
++-- spawn/
+|   +-- BlockQuery           block query interface (implemented by adapters)
+|   +-- SpawnScanner         exhaustive 17x13x17 scan
+|   +-- SpawnScanResult      valid points + rejections + hit probability
+|
++-- panic/
+|   +-- ScaryMob             13 scaring mobs + radii + engineering traits
+|   +-- ScaryMobRegistry     registry with modded extension and strict mode
+|   +-- ScaryMobSnapshot     a mob's state at an instant
+|   +-- SightQuery           line of sight interface
+|   +-- PanicResolver        scaring relation solver
+|   +-- PanicLink            one link (carries what a dashed line needs)
+|   +-- PanicAnalysis        full analysis (primary scarer, inactive reasons)
+|
++-- stats/
+|   +-- StatsRecorder        statistics recorder
+|   +-- FailureRecord        one aggregated failure record
+|
++-- config/
+|   +-- ModSettings          the 6 switches + advanced options
+|
++-- i18n/
+    +-- Lang                 minimal i18n (self-written key=value parser)
+
+
+3. KEY DESIGN DECISIONS
+----------------------------------------------------------------
+
+3.1 Why tri-state instead of boolean
+
+  A villager's chunk may be unloaded and the spawn area may be unscanned.
+  Such a condition is neither "met" nor "not met". Collapsing it to a
+  boolean shows a wrong red cross and records a bogus failure reason.
+
+  Hence RuleResult.Status is PASS / FAIL / UNKNOWN. UNKNOWN never takes
+  part in failure attribution and is rendered semi-transparent.
+
+3.2 Why attribution must resolve the path first
+
+  The two paths are mutually exclusive by nature: a villager being scared
+  by a zombie always has GOSSIPING = FAIL. Taking the first failing
+  condition in enum order would make a perfectly healthy panic farm
+  report "reason: not gossiping" forever, destroying the statistics screen.
+
+  See VillagerReport.primaryFailure():
+  common conditions -> active path conditions -> spawn point.
+
+3.3 Why the spawn scan is exhaustive, not 10 random attempts
+
+  The spawn-area box (settings item 4) must show the whole valid region.
+  Keeping only 10 random results would show nothing useful.
+  So the whole 17x13x17 volume is scanned.
+
+  The random hit probability is estimated separately, and its denominator
+  is the number of COLUMNS (17x17 = 289), not cells. Vanilla picks a random
+  column and then finds the topmost valid position within it. Using cells
+  would badly underestimate the chance: with all 289 columns valid,
+  the cell-based formula gives 0.55 while the truth is 1.0.
+
+3.4 Why scaring mobs need a registry
+
+  The requirement is "support every mob that can scare a villager".
+  The 13 vanilla mobs are enumerated in ScaryMob, but modpack mobs cannot
+  be known in advance.
+
+  ScaryMobRegistry therefore provides:
+    - runtime registration: register("somemod:thing", radius)
+    - strict mode (default ON): only registered mobs count as scary
+    - non-strict mode: unregistered but hostile mobs use radius 8
+
+  Strict by default so unrelated mobs walking past do not paint noise.
+
+3.5 Why unverified radii are flagged
+
+  The Wither is named as a panic source in the wiki prose but is absent
+  from the radius table. Frostbite was added in the fourth 2026 drop and
+  has no dedicated radius data. Both use estimates, and the player must
+  know they are estimates.
+
+  So ScaryMob.radiusVerified = false and PanicLink.inferredRadius = true.
+
+3.6 Why i18n is not properties or json
+
+  - .properties is Latin-1: Chinese needs \uXXXX escapes, unmaintainable
+  - json needs a parser inside the mod, violating "minimise dependencies"
+
+  Custom format: UTF-8 + key=value + # comments, 80-line parser.
+  Files stay hand-editable and a missing key falls back to English
+  instead of crashing.
+
+
+4. RULE REFERENCE
+----------------------------------------------------------------
+
+All from the Minecraft Wiki; identical for 1.21 through 26.3.
+
+| Condition     | Parameter                     | Code                            |
+|---------------|-------------------------------|---------------------------------|
+| Adult         | -                             | Condition.ADULT                 |
+| Slept         | 24000 ticks (20 min)          | evalSlept / sleepWindowTicks    |
+| Golem scan    | +/-16 XYZ box, every 200 ticks| GolemDetector                   |
+| Golem cooldown| 600 ticks (30 s)              | golemDetectCooldownTicks        |
+| Nearby summon | +/-10 XYZ, 600 ticks          | nearbySummonCooldownTicks       |
+| Panic         | spherical distance + eye LoS  | ScaryMob / PanicResolver        |
+| Group (panic) | >=3 within 10 blocks          | panicParticipantThreshold       |
+| Group (gossip)| >=5 within 10, 1 gossiping    | gossipParticipantThreshold      |
+| Spawn volume  | 17 x 13 x 17                  | spawnHalfWidth / spawnHalfHeight|
+| Attempts      | 10                            | spawnAttempts                   |
+
+Six spawn validations, in vanilla order (SpawnScanner.validate):
+
+  1. Block below has a full top surface   -> no_full_top
+  2. Candidate + 2 above are not full      -> full_block_above
+  3. Those 3 are not rails                 -> rail
+  4. Those 3 are not redstone powered      -> powered
+  5. The 2 blocks above are not water      -> water_above
+  6. No entity collision                   -> entity_collision
+
+Each keeps its own reason code, because "no full top surface" and
+"redstone powered" have completely different fixes.
+
+
+5. SCARING MOB TABLE
+----------------------------------------------------------------
+
+| Mob            | Radius | Verified | No burn | Disarmable | Containable | Breaks |
+|----------------|--------|----------|---------|------------|-------------|--------|
+| Zombie         | 8      | yes      |         |            | yes         |        |
+| Husk           | 8      | yes      | yes     |            | yes         |        |
+| Drowned        | 8      | yes      | yes     |            | yes         |        |
+| Zombie Villager| 8      | yes      |         |            | yes         |        |
+| Vex            | 8      | yes      | yes     |            |             |        |
+| Vindicator     | 10     | yes      |         |            | yes         |        |
+| Zoglin         | 10     | yes      | yes     |            |             |        |
+| Evoker         | 12     | yes      |         |            | yes         |        |
+| Illusioner     | 12     | yes      |         |            | yes         |        |
+| Ravager        | 12     | yes      |         |            |             | yes    |
+| Pillager       | 15     | yes      | yes     | yes        | yes         |        |
+| Wither         | 12     | inferred |         |            |             | yes    |
+| Frostbite      | 8      | inferred |         |            | yes         |        |
+| Unregistered   | 8      | inferred | -       | -          | -           | -      |
+
+
+6. DATA CONTRACTS FOR THE UI STAGE
+----------------------------------------------------------------
+
+Do not change the semantics of these five classes; they are the stable
+interface between the engine and the renderer.
+
+  1. VillagerReport
+       hardConditionsMet()      icon 1 (check / cross)
+       hardConditionsUnknown()  whether any item is indeterminate
+       panicking()              icon 2 (skull)
+       gossipReady()            icon 3 (horn)
+       results()                full status table for the detail screen
+       panicParticipants() / gossipParticipants()
+       primaryFailureCode()     statistics attribution
+
+  2. PanicAnalysis
+       links                    settings item 5 link data
+       effective()              solid lines
+       blockedBySight()         dashed (in range, LoS blocked)
+       blockedByDistance()      dashed (too far)
+       primaryScarer()          main scaring mob
+       idleMobs()               mobs scaring nobody
+
+  3. SpawnScanResult
+       validPoints()            contents of the settings-4 box
+       rejections()             why each cell was rejected
+       min() / max()            box bounds
+       singleSummonSuccessChance()
+
+  4. ModSettings             the six switches + advanced options
+  5. Lang                    i18n lookup
+
+
+7. TEST COVERAGE
+----------------------------------------------------------------
+
+98 assertions across six test classes:
+
+  ConditionEngineTest      20  per-rule checks against the wiki
+  PanicResolverTest        33  all 13 scaring mobs + modded registration + LoS
+  SpawnScannerTest         13  six rejection reasons + probability model
+  StatsRecorderTest        10  rate, attribution, ordering, reset
+  LangTest                 11  key-set parity, placeholders, fallback
+  VersionAndDetectorTest   11  version profile + detection state machine
+
+Deliberate anti-regression assertions:
+
+  - sleep at 23999 passes, 24000 fails (both sides of the boundary)
+  - golem detected at 599 fails, 600 passes
+  - distance 16 hits, 17 misses (box boundary)
+  - the (+/-16, +/-16, +/-16) corner hits (proves box, not sphere)
+  - 5 points in one column gives the same chance as 1 point
+    (proves the denominator is columns, not cells)
+  - a participant at radius 10 counts, at 11 does not
+  - no condition name may equal its own key
+    (separates "translated" from "fell back to key")
+
+
+8. NEXT STAGES
+----------------------------------------------------------------
+
+  Stage 2: loader adapters
+    - Fabric / NeoForge implementations of BlockQuery and SightQuery
+    - villager state collection (sleep time, detection timestamps, bound bed)
+    - event subscriptions
+
+  Stage 3: interface (LAYOUT MUST BE APPROVED BEFORE CODING)
+    - overhead icons
+    - villager status screen (right-click; extra button on trade screens)
+    - settings screen with hotkey
+    - statistics screen
+    - lines and boxes via the gizmo system
+
+  Stage 4: packaging
+    - Chinese + English guides, technical notes, pitfalls, one zip

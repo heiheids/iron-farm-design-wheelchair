@@ -1,0 +1,36 @@
+# ---------------------------------------------------------------
+# 备份用 .gitignore
+#
+# 目标：每次改动都能回滚，但**不把构建产物和依赖塞进历史**。
+# 判断标准：能重新生成的 → 忽略；手写的 → 必须纳入。
+# ---------------------------------------------------------------
+
+# Gradle 缓存与构建产物（可重新生成，体积巨大）
+.gradle/
+build/
+*/build/
+/out/
+
+# Neoforge 的 NeoForm 反混淆产物
+# ⚠ 这个目录丢了要联网重下几 GB（踩过坑：clean 后构建失败）
+neoforge-*/.gradle/
+neoforge-*/build/moddev/
+
+# 临时诊断/编译输出（这些是我调试时产生的碎片，不该进历史）
+build-*.txt
+deps-*.txt
+javac-*.txt
+sources-*.txt
+tasks.txt
+out.txt
+*.log
+
+# 已发布的 zip（在别处有备份，且每个 1.6MB）
+*.zip
+
+# IDE / 系统
+.idea/
+*.iml
+.vscode/
+Thumbs.db
+desktop.ini

@@ -1,0 +1,97 @@
+// Fabric 26.3 模块。
+//
+// ⚠⚠ 与 1.21.1 模块的构建差异（这是 1.21.11 → 26.1 的混淆边界造成的）：
+//
+//   ┌──────────────┬────────────────────────────┬───────────────────────┐
+//   │              │ 1.21.1（混淆）             │ 26.3（非混淆）        │
+//   ├──────────────┼────────────────────────────┼───────────────────────┤
+//   │ 插件 id      │ net.fabricmc.fabric-loom-remap │ net.fabricmc.fabric-loom │
+//   │ mappings     │ loom.officialMojangMappings()  │ **不写**           │
+//   │ 模组依赖     │ modImplementation           │ implementation        │
+//   │ jar 任务     │ remapJar                   │ jar                   │
+//   │ Java target  │ 21                         │ **25**                │
+//   └──────────────┴────────────────────────────┴───────────────────────┘
+//
+// 读错这一格会得到"编译能过但产物是错的"—— modImplementation 和 remapJar
+// 在 26.x 上**不报错**，只是默默做错事。这是版本矩阵文档里点名的最常见失误。
+
+plugins {
+    id 'net.fabricmc.fabric-loom' version "${loom_version}"
+    id 'java'
+}
+
+version = project.findProperty('mod_version') ?: '0.1.0'
+group = 'com.heishandashu'
+
+base {
+    archivesName = "ironfarm-fabric-${mc26_version}"
+}
+
+repositories {
+    mavenCentral()
+}
+
+loom {
+    // AccessWidener：开放 Villager.lastGossipTime 与交易界面的布局字段。
+    // 内容与 1.21.1 那份相同，只是类名跟着 26.3 的包结构调整了。
+    accessWidenerPath = file('src/main/resources/ironfarm.accesswidener')
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${mc26_version}"
+    // ⚠ 26.x 非混淆，**没有 mappings 行**
+
+    implementation "net.fabricmc:fabric-loader:${mc26_loader_version}"
+    implementation "net.fabricmc.fabric-api:fabric-api:${mc26_fabric_api_version}"
+
+    // 判定引擎：纯 Java，与 1.21.1 两端共用同一份源码（零改动）
+    implementation project(':engine')
+    include project(':engine')
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_25
+    targetCompatibility = JavaVersion.VERSION_25
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = 25
+}
+
+// engine 的语言文件、图标、条件文档必须进 jar
+sourceSets {
+    main {
+        resources {
+            srcDir rootProject.file('engine/src/main/resources')
+        }
+    }
+}
+
+tasks.named('processResources') {
+    dependsOn ':engine:langToJson'
+}
+
+processResources {
+    // ⚠ 必须显式指定重复策略。
+    //   engine 的 resources 是本模块的 srcDir，而本模块自己也放了一份
+    //   assets/ironfarm/ 资源，两者内容相同 —— 不声明会直接构建失败：
+    //     "Entry assets/ironfarm/icon.png is a duplicate but no
+    //      duplicate handling strategy has been set"
+    //   用 INCLUDE 而不是 EXCLUDE：内容本来就一样，保留即可。
+    duplicatesStrategy = DuplicatesStrategy.INCLUDE
+
+    inputs.property 'version', project.version
+    inputs.property 'mc26_version', mc26_version
+    inputs.property 'mc26_loader_version', mc26_loader_version
+    inputs.property 'mc26_fabric_api_version', mc26_fabric_api_version
+
+    filesMatching('fabric.mod.json') {
+        expand(
+                version: project.version,
+                mc26_version: mc26_version,
+                mc26_loader_version: mc26_loader_version,
+                mc26_fabric_api_version: mc26_fabric_api_version
+        )
+    }
+}

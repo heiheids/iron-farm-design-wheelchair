@@ -1,0 +1,136 @@
+plugins {
+    id 'java-library'
+}
+
+// engine 是纯 Java：不引用任何 net.minecraft.* / net.fabricmc.* / net.neoforged.* 类。
+// 这样它既能被 Fabric / NeoForge 两个加载器共用，也能在没有游戏的环境里跑测试。
+// 任何对 Minecraft 的依赖都必须留在加载器侧的 adapter 里。
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.compilerArgs << '-Xlint:unchecked'
+}
+
+dependencies {
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+// ⚠ 仓库必须写在模块里。
+// 根 build.gradle 刻意不声明 repositories —— 那会把 Fabric maven 带进纯 Java 模块，
+// 而 engine 必须能在没有 Minecraft 的环境里独立构建。
+repositories {
+    mavenCentral()
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+    systemProperty 'file.encoding', 'UTF-8'
+    testLogging {
+        events 'passed', 'failed', 'skipped'
+        showStandardStreams = true
+    }
+}
+
+jar {
+    archiveBaseName = 'ironfarm-engine'
+}
+
+// ======================================================================
+// 语言文件：.lang（可读源文件）→ .json（Minecraft 真正读取的格式）
+// ======================================================================
+//
+// 为什么必须转换：
+//   Minecraft 只认 assets/<modid>/lang/en_us.json 与 zh_cn.json（JSON 格式）。
+//   我最初按 Bukkit/Forge 习惯写了 zh_cn.lang（key=value 文本），
+//   结果游戏里所有按钮显示原始键名 ironfarm.gui.settings.master，
+//   一个字的翻译都没有 —— 用户截图暴露的正是这个问题。
+//
+// 保留 .lang 的理由：它比 JSON 好读好维护（没有引号、没有逗号），
+// 中文不需要转义，注释可以随便写。真正的机读格式在构建期生成。
+//
+// ⚠ 生成的 .json 是构建产物，但**必须提交到 resources 里**
+//    或者由本任务在 processResources 之前生成 —— 这里选后者，
+//    并把输出目录设成 resources 内的固定子目录，避免污染 git。
+
+def langDir = file('src/main/resources/assets/ironfarm/lang')
+
+tasks.register('langToJson') {
+    description = '把 .lang 文本转成 Minecraft 读取的 en_us.json / zh_cn.json'
+    group = 'build'
+
+    def inputDir = langDir
+    inputs.dir(inputDir).withPropertyName('langFiles')
+    outputs.dir(inputDir).withPropertyName('jsonFiles')
+
+    doLast {
+        inputDir.listFiles()?.each { f ->
+            if (!f.name.endsWith('.lang')) {
+                return
+            }
+            def base = f.name.substring(0, f.name.length() - '.lang'.length())
+            def out = new File(inputDir, base + '.json')
+            def kv = new LinkedHashMap<String, String>()
+            f.getText('UTF-8').eachLine { raw ->
+                def line = raw.trim()
+                if (line.isEmpty() || line.startsWith('#')) {
+                    return
+                }
+                def eq = line.indexOf('=')
+                if (eq <= 0) {
+                    return
+                }
+                kv.put(line.substring(0, eq).trim(), line.substring(eq + 1).trim())
+            }
+            out.setText(toLangJson(kv), 'UTF-8')
+            logger.lifecycle("langToJson: ${f.name} -> ${out.name} (${kv.size()} 条)")
+        }
+    }
+}
+
+/** 手写 JSON，不引第三方库（工程规矩：尽量减少依赖）。 */
+static String toLangJson(Map<String, String> kv) {
+    def sb = new StringBuilder()
+    sb.append('{\n')
+    def i = 0
+    kv.each { k, v ->
+        sb.append('  "').append(escapeJson(k)).append('": "').append(escapeJson(v)).append('"')
+        if (++i < kv.size()) {
+            sb.append(',')
+        }
+        sb.append('\n')
+    }
+    sb.append('}\n')
+    return sb.toString()
+}
+
+static String escapeJson(String s) {
+    def sb = new StringBuilder(s.length() + 8)
+    for (int i = 0; i < s.length(); i++) {
+        char c = s.charAt(i)
+        switch (c) {
+            case '"': sb.append('\\"'); break
+            case '\\': sb.append('\\\\'); break
+            case '\n': sb.append('\\n'); break
+            case '\r': sb.append('\\r'); break
+            case '\t': sb.append('\\t'); break
+            default:
+                if (c < 0x20) {
+                    sb.append(String.format('\\u%04x', (int) c))
+                } else {
+                    sb.append(c)
+                }
+        }
+    }
+    return sb.toString()
+}
+
+// 语言转换必须发生在资源处理之前
+tasks.named('processResources') {
+    dependsOn 'langToJson'
+}

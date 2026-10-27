@@ -1,0 +1,9 @@
+// 根工程只做最少的公共配置。
+// 各模块自己 apply 插件 —— Loom 模块不能被这里的 java 插件配置污染。
+
+plugins {
+    id 'java'
+}
+
+group = 'com.heishandashu'
+version = project.findProperty('mod_version') ?: '0.1.0'

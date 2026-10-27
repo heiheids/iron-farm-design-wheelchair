@@ -1,0 +1,80 @@
+// NeoForge 26.3 模块。
+//
+// 与 neoforge-1.21.1 的差异：
+//   1. MC 26.3 是非混淆版本，ModDevGradle 仍可用，但不需要 NeoForm 反混淆步骤。
+//   2. Java target = 25（不是 21）。
+//   3. 事件类名/包路径跟 26.3 走（RenderLevelStageEvent 等需重新核实）。
+//   4. 渲染层改用 Gizmos（与 fabric-26.3 同一套逻辑）。
+
+plugins {
+    id 'java'
+    id 'net.neoforged.moddev' version '2.0.148'
+}
+
+version = project.findProperty('mod_version') ?: '0.1.0'
+group = 'com.heishandashu'
+
+base {
+    archivesName = "ironfarm-neoforge-${neoforge263_mc_version}"
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_25
+    targetCompatibility = JavaVersion.VERSION_25
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = 25
+}
+
+neoForge {
+    version = project.neoforge263_version
+
+    runs {
+        client {
+            client()
+        }
+    }
+
+    mods {
+        ironfarm {
+            sourceSet sourceSets.main
+        }
+    }
+
+    accessTransformers.from 'src/main/resources/META-INF/accesstransformer.cfg'
+}
+
+dependencies {
+    implementation project(':engine')
+    jarJar project(':engine')
+}
+
+sourceSets {
+    main {
+        resources {
+            srcDir rootProject.file('engine/src/main/resources')
+        }
+    }
+}
+
+tasks.named('processResources') {
+    dependsOn ':engine:langToJson'
+}
+
+processResources {
+    duplicatesStrategy = DuplicatesStrategy.INCLUDE
+
+    inputs.property 'version', project.version
+    inputs.property 'neoforge263_version', neoforge263_version
+    inputs.property 'neoforge263_mc_version', neoforge263_mc_version
+
+    filesMatching('META-INF/neoforge.mods.toml') {
+        expand(
+                version: project.version,
+                neoforge263_version: neoforge263_version,
+                neoforge263_mc_version: neoforge263_mc_version
+        )
+    }
+}

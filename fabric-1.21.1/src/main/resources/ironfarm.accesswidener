@@ -1,0 +1,50 @@
+accessWidener v2 named
+
+# ======================================================================
+# Villager 的闲聊时间戳
+# ======================================================================
+#
+# 为什么需要它：原版没有「正在闲聊」这个状态。gossip() 是一次性调用，
+# 只在两只村民交谈时发生，并把 lastGossipTime 设为当时的时间。
+# 这个字段是 private，只能通过 AW 读。
+#
+# 有了它就能算出准确的「最近一次闲聊距今多久」，
+# 而不是像第一版那样猜一个 200 tick 窗口（实际是 1200）。
+accessible field net/minecraft/world/entity/npc/Villager lastGossipTime J
+
+# ======================================================================
+# Screen.addRenderableWidget
+# ======================================================================
+#
+# 为什么不用 Screen.children().add(...)：那条路只是把控件塞进 children，
+# 不进 renderables/narratables，结果是**按钮画得出来但点不动**。
+# addRenderableWidget 会同时做三件事（children、renderables、narratables）。
+# 但它是 protected，Mixin 里强转调用过不了编译期访问检查，所以用 AW 开放。
+#
+# 真实签名（javap 核实）：
+#   protected <T extends GuiEventListener & Renderable & NarratableEntry> T addRenderableWidget(T)
+# 泛型擦除后参数类型是 GuiEventListener，返回也是 GuiEventListener。
+accessible method net/minecraft/client/gui/screens/Screen addRenderableWidget (Lnet/minecraft/client/gui/components/events/GuiEventListener;)Lnet/minecraft/client/gui/components/events/GuiEventListener;
+
+# ======================================================================
+# MerchantScreen 的布局字段
+# ======================================================================
+#
+# 为什么用 AW 而不是 @Shadow：
+#   Loom 1.18 默认不再生成 refmap，而 @Shadow 依赖它把 named 名翻译成
+#   intermediary 名。没有 refmap 时运行时会报
+#       @Shadow field field_2776 was not located in target class
+#       No refMap loaded
+#   → MixinApplyError → **打开交易界面直接崩溃**。
+#
+#   这个崩溃藏了很久，因为该 Mixin 是 @Inject 到 init()，
+#   只有第一次打开交易界面时目标类才会被加载并变换。
+#
+#   用 AW 把这 4 个 protected 字段变成 public，强转直接读，完全不依赖 refmap。
+#
+# ⚠ 字段实际声明在**父类 AbstractContainerScreen** 上，不是 MerchantScreen。
+#   AW 必须指向真正声明该字段的类，否则会被当成"不存在的字段"直接忽略。
+accessible field net/minecraft/client/gui/screens/inventory/AbstractContainerScreen leftPos I
+accessible field net/minecraft/client/gui/screens/inventory/AbstractContainerScreen topPos I
+accessible field net/minecraft/client/gui/screens/inventory/AbstractContainerScreen imageWidth I
+accessible field net/minecraft/client/gui/screens/inventory/AbstractContainerScreen imageHeight I

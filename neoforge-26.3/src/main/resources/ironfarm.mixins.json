@@ -1,0 +1,14 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.heishandashu.ironfarm.neoforge263.mixin",
+  "compatibilityLevel": "JAVA_25",
+  "client": [
+    "MerchantScreenMixin",
+    "ScreenInvoker"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
+

@@ -1,0 +1,26 @@
+accessWidener v2 official
+
+# 26.3 的 AccessWidener。
+#
+# ⚠ 命名空间必须是 official，不是 named。
+#   26.x 是非混淆版本，运行时没有 intermediary 映射层，
+#   写 named 会直接构建失败：
+#     "Expected official namespace for access widener entry, found: named"
+# 与 1.21.1 那份内容相同，但类名要跟着 26.3 的包结构调整：
+#   Villager 从 npc 包移到 npc.villager 子包
+#
+# 为什么需要它：原版没有"正在闲聊"这个状态。gossip() 是一次性调用，
+# 把 lastGossipTime 设为当时的时间。不读它就只能猜一个窗口
+# （第一版猜 200 tick，实际是 1200）。
+accessible field net/minecraft/world/entity/npc/villager/Villager lastGossipTime J
+
+# 交易界面底部加按钮需要读布局字段。
+# 这 4 个字段声明在父类 AbstractContainerScreen 上，不是 MerchantScreen。
+accessible field net/minecraft/client/gui/screens/inventory/AbstractContainerScreen leftPos I
+accessible field net/minecraft/client/gui/screens/inventory/AbstractContainerScreen topPos I
+accessible field net/minecraft/client/gui/screens/inventory/AbstractContainerScreen imageWidth I
+accessible field net/minecraft/client/gui/screens/inventory/AbstractContainerScreen imageHeight I
+# Screen.addRenderableWidget
+# addRenderableWidget 会同时做三件事（children、renderables、narratables）。
+#   protected <T extends GuiEventListener & Renderable & NarratableEntry> T addRenderableWidget(T)
+accessible method net/minecraft/client/gui/screens/Screen addRenderableWidget (Lnet/minecraft/client/gui/components/events/GuiEventListener;)Lnet/minecraft/client/gui/components/events/GuiEventListener;

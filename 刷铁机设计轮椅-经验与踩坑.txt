@@ -1,0 +1,2647 @@
+刷铁机设计轮椅 —— 经验与踩坑记录
+================================================================
+最后更新：2026-10-26（第二轮：加了 Fabric 1.21.1 适配层，并修正了引擎的错误模型）
+适用对象：后续接手本工程的智能体 / 开发者
+================================================================
+
+本文只记「真的踩过、且下次还会踩」的东西。不含常识，不含 API 手册。
+
+
+================================================================
+★ 最重要的一条：不要按 Wiki 措辞实现判定，要读字节码
+================================================================
+
+第一轮的引擎是照 Minecraft Wiki 的措辞写的，加了适配层去读真实 jar 之后，
+发现**有三处实质错误**。这是本工程最贵的教训，单独放在最前面。
+
+【错 1】多了一条根本不存在的条件："30 秒内附近无村民召唤成功"
+----------------------------------------------------------------
+  第一轮我按 Wiki 写了「村民 ±10 格内 30 秒内没有召唤过」这条独立条件。
+  真实字节码里**没有这个东西**。
+
+  Villager.golemSpawnConditionsMet 的全部逻辑只有：
+      Optional<Long> lastSlept = brain.getMemory(LAST_SLEPT);
+      if (!lastSlept.isPresent()) return false;
+      return now - lastSlept.get() < 24000;
+
+  Villager.wantsToSpawnGolem 再加一条：
+      return golemSpawnConditionsMet(now)
+             && !brain.hasMemoryValue(GOLEM_DETECTED_RECENTLY);
+
+  就这样。没有"附近有人召唤过"。
+
+【错 2】把「附近有铁傀儡」理解成了「附近有村民召唤过」
+----------------------------------------------------------------
+  GOLEM_DETECTED_RECENTLY 是**这只村民自己看到过铁傀儡**，
+  由 GolemSensor 每 200 tick 扫一次 NEAREST_LIVING_ENTITIES、
+  发现 IRON_GOLEM 就 setMemoryWithExpiry(..., 599L)。
+  它跟"别的村民召唤成功"没有关系。
+
+  教训：Wiki 上「在 10 格内村民召唤成功后会扩散冷却」这类描述，
+  在 1.21.1 的实现里是**通过邻居的 GOLEM_DETECTED_RECENTLY 间接实现**的
+  （spawnGolemIfNeeded 成功后会对邻居调 GolemSensor.golemDetected）。
+  所以"看起来存在"的效果，实现路径完全不同 —— 照措辞写就会写错。
+
+【错 3】以为参与者也必须处于恐慌/闲聊
+----------------------------------------------------------------
+  spawnGolemIfNeeded 里的邻居过滤是：
+      .filter(v -> v.wantsToSpawnGolem(now))
+  只看 wantsToSpawnGolem，**不要求邻居在恐慌或闲聊**。
+
+  恐慌/闲聊只决定"谁来发起"和"门槛是 3 还是 5"：
+      VillagerPanicTrigger.tick:  if (time % 100 == 0) spawnGolemIfNeeded(level, time, 3)
+      Villager.gossip:            spawnGolemIfNeeded(level, time, 5)
+
+  而且邻居计数**不包含自己**（getEntitiesOfClass 不返回自己）。
+  一个人合格时计数是 0，不是 1 —— 这一条极易写错。
+
+【错 4】599 不是 600
+----------------------------------------------------------------
+  GolemSensor.golemDetected 里写的是 setMemoryWithExpiry(..., 599L)。
+  常见资料都写 600。差一个 tick 会让"刚好 30 秒"的边界判定反过来。
+  这些数字现在全部钉进 VersionProfile 并注明字节码出处。
+
+【教训】
+  Wiki 适合理解**机制意图**，不适合作为**实现规格**。
+  凡是要写成代码的判定，都要去 javap 反编译确认一遍。
+  具体做法见下面「怎么读真实代码」一节。
+
+
+----------------------------------------------------------------
+一、环境类
+----------------------------------------------------------------
+
+【坑 1】gradle.properties 里不能出现中文路径 —— 这是个无解的二难
+----------------------------------------------------------------
+本工程路径是 D:\工程-刷铁机设计轮椅，含中文。第一次构建就炸了两次：
+
+  第一次：org.gradle.jvmargs 里写 D:/工程-刷铁机设计轮椅/...（真字 UTF-8）
+    → Gradle 用 java.util.Properties 读，那是 Latin-1 语义
+    → 路径烂成乱码，报
+      java.io.IOException: java.io.tmpdir is set to a directory that doesn't exist
+
+  第二次：改成 \\u5DE5 双反斜杠转义
+    → Properties 把 \\ 解释成「一个字面反斜杠」+ 字面 "u5DE5"
+    → 目录名真的叫 "\u5DE5\u7A0B-..."，同样不存在
+    → 报错信息看起来像"路径拼错了"，极难联想到是转义层数问题
+
+  结论：不要在 jvmargs 里带中文路径。本工程 jvmargs 只有
+        -Xmx3G -Dfile.encoding=UTF-8
+
+【坑 2】本机没有 Python，图标要用 Java 生成
+----------------------------------------------------------------
+  python.exe 只是 Microsoft Store 的占位符。没有 PIL。
+  解法：tools/MakeIcon.java，用 java 单文件源码模式直接跑。
+
+【坑 3】Loom 1.19.x 要求 Gradle 9.8+，Loom 1.18.x 要求 JDK 25
+----------------------------------------------------------------
+  实测三次失败：
+    Loom 1.19.3 + Gradle 9.7.1 → "requires at least Gradle 9.8.0"
+    Loom 1.18.4 + JDK 21      → "Dependency requires at least JVM runtime version 25"
+    Loom 1.18.4 + JDK 25      → 通过
+
+  所以本工程必须：
+    JAVA_HOME = D:\工程-泡世界\mcmod\tools\jdk25   （跑 Gradle）
+    编译目标 release = 21                          （1.21.1 需要）
+  engine 模块刻意用 release 17，这样它在 17/21/25 上都能加载。
+
+【坑 4】settings.gradle 必须声明 Fabric 插件仓库
+----------------------------------------------------------------
+  只在 build.gradle 里写 repositories 是不够的 —— 插件解析发生在
+  pluginManagement 阶段。不写就会报
+  "Plugin [id: 'net.fabricmc.fabric-loom-remap'] was not found"。
+
+【坑 5】多模块时仓库要写进各模块
+----------------------------------------------------------------
+  把 repositories 从根 build.gradle 挪走后，engine 立刻报
+  "Cannot resolve org.junit.jupiter:junit-jupiter because no repositories are defined"。
+  现在：根不声明，各模块自己声明。好处是 engine 不会被 Fabric maven 污染。
+
+【坑 6】PowerShell 会把 java 的 stderr 当成错误
+----------------------------------------------------------------
+  java 往 stderr 写一行 warning，PS 就抛 NativeCommandError 掐掉整条命令。
+  解法：一律 Out-File 再 Get-Content，不要直接看管道输出。
+
+【坑 7】构建日志里的中文全是乱码
+----------------------------------------------------------------
+  控制台代码页 936，Gradle 输出被当 GBK 解释。
+  测试失败一律从 build/test-results/test/*.xml 读（UTF-8，能正确显示）。
+
+【坑 8】.ps1 含中文必须带 UTF-8 BOM，.cmd 不能带
+----------------------------------------------------------------
+  PS 5.1 把无 BOM 的 UTF-8 当 GBK 读，字符串里的中文会把引号吃掉，
+  报 "The string is missing the terminator"。
+
+
+----------------------------------------------------------------
+二、怎么读真实代码（本工程的核心方法论）
+================================================================
+
+本机没有 Minecraft 客户端可跑，但**有 Loom 解出来的 merged jar**，足够反编译。
+
+步骤 1：找到 jar
+  构建一次之后，在这个路径下：
+    <工程>\.gradle\loom-cache\minecraftMaven\net\minecraft\minecraft-merged-*\1.21.1-loom.mappings.*\*.jar
+
+步骤 2：解包（javap 能直接读 jar，但扫全量方法时解包更快）
+  Add-Type -AssemblyName System.IO.Compression.FileSystem
+  [System.IO.Compression.ZipFile]::ExtractToDirectory($jar, $tmp)
+
+步骤 3：看类结构
+  javap -p -classpath $tmp net.minecraft.world.entity.npc.Villager
+
+步骤 4：看方法实现
+  javap -p -c -classpath $tmp net.minecraft.world.entity.npc.Villager
+
+步骤 5：看常量值
+  javap -p -v -classpath $tmp <Class> | Select-String 'ConstantValue' -Context 0,3
+
+  ⚠ javap 的 -c 输出里，常量会直接以 `ldc2_w 24000l` / `iconst_3` 这种形式出现，
+    比翻源码快得多。找门槛数字就用这个。
+
+本轮真正定位到问题的四个类：
+  Villager.golemSpawnConditionsMet   → 睡眠 24000
+  Villager.wantsToSpawnGolem         → GOLEM_DETECTED_RECENTLY
+  Villager.spawnGolemIfNeeded        → inflate(10,10,10) + limit(5) + trySpawnMob(10,8,6)
+  GolemSensor.golemDetected          → 599 tick
+  VillagerPanicTrigger.tick          → 100 tick + 门槛 3
+  Villager.gossip                    → 门槛 5
+  VillagerHostilesSensor.static{}    → 完整恐慌半径表（11 种生物）
+  SpawnUtil.trySpawnMob              → 参数语义：attempts, hRange, vRange
+  Sensor.TARGETING_RANGE             → 16
+
+
+----------------------------------------------------------------
+三、恐吓源类
+----------------------------------------------------------------
+
+【坑 9】恐慌半径表来自 VillagerHostilesSensor，共 11 种（不是 13）
+----------------------------------------------------------------
+  字节码里的 ACCEPTABLE_DISTANCE_FROM_HOSTILES 完整内容：
+    8 格：drowned, husk, vex, zombie, zombie_villager
+    10 格：vindicator, zoglin
+    12 格：evoker, illusioner, ravager
+    15 格：pillager
+
+  也就是说 **凋灵不在表里**。第一轮我按 Wiki 正文把它当 12 格收进了枚举，
+  并标了"未验证"—— 现在看来应该直接标"不构成恐慌源"。
+  引擎里保留 WITHER 枚举项只为显示，ScaryMobRegistry 的严格模式会拒绝它。
+
+【坑 10】模组生物必须能注册，且默认不采信
+----------------------------------------------------------------
+  整合包里有什么怪，工程师不可能预先知道。
+  ScaryMobRegistry 提供运行时注册 + 严格模式（默认开）：
+  未登记的生物不画线、不计入 panic。
+  否则一只路过的无关怪物就会在界面上画出噪点。
+
+【坑 11】能吓到 ≠ 适合当恐吓源
+----------------------------------------------------------------
+  ScaryMob 里带 5 个工程属性（不参与原版判定，但决定机器能否持续）：
+    sunlightImmune    僵尸会烧死，尸壳/溺尸不会
+    disarmable        掠夺者必须能卸弩，否则射杀村民和傀儡
+    canBeContained    恼鬼穿墙，关不住
+    breaksBlocks      凋灵会拆方块
+    killsVillagers    会真的杀死村民
+
+
+----------------------------------------------------------------
+四、适配层类
+----------------------------------------------------------------
+
+【坑 12】客户端的 Brain 记忆拿不到
+----------------------------------------------------------------
+  LAST_SLEPT / GOLEM_DETECTED_RECENTLY 都在服务端的 Brain 里。
+  单机可以用 getSingleplayerServer() 拿到，多人完全拿不到。
+
+  取舍：拿不到就显示"无法判定"（三态的 UNKNOWN），
+  而不是显示一个错误的红叉。宁可显示"不知道"，也不要让玩家
+  去拆一台本来正常的机器。
+
+【坑 13】isPersistenceRequired() 在 Mob 上，不在 LivingEntity 上
+----------------------------------------------------------------
+  写错直接编译失败。正确写法：
+    (e instanceof Mob && ((Mob) e).isPersistenceRequired())
+
+【坑 14】BlockState.isSolid() 是 1.21.1 唯一的名字，而且带 @Deprecated
+----------------------------------------------------------------
+  已用 javap 确认 BlockStateBase 里公开的只有 isSolid()，
+  没有 isSolidBlocking()。换成 canOcclude() 会改变语义（玻璃就没法站了）。
+  所以照用 isSolid()，接受那条 deprecation 警告。
+
+【坑 15】生成点概率的分母是"列"，不是"格"
+----------------------------------------------------------------
+  原版是「随机取一个 (x,z) 列，再在该列里找最上面的合法位置」。
+  随机性发生在 17×17 = 289 列上，不是 17×13×17 = 3757 格上。
+  用格数当分母会把概率显著低估（289 列全合法时是 1.0，按格数算只有 0.55）。
+
+【坑 16】不要为了"看得更远"去强制加载区块
+----------------------------------------------------------------
+  isChunkLoaded 只能用 level.hasChunk(...)，
+  绝不能调 getChunk —— 那会触发生成并卡死服务端。
+
+
+----------------------------------------------------------------
+五、多语言类
+----------------------------------------------------------------
+
+【坑 17】中英键集合必须严格一致
+----------------------------------------------------------------
+  某个键只在中文里有、英文忘了加，切英文就显示 ironfarm.cond.slept。
+  做成测试 keySetsAreIdenticalBetweenLanguages，双向比对并列出缺哪些键。
+
+【坑 18】不要用 properties 或 json 存文案
+----------------------------------------------------------------
+  .properties 是 Latin-1，中文要 \uXXXX 转义（见坑 1，同一个根因）。
+  json 需要模组里塞解析器，违反"减少依赖"。
+  本工程用自研的 key=value + UTF-8 + #注释，80 行解析器。
+
+
+----------------------------------------------------------------
+六、测试方法类
+----------------------------------------------------------------
+
+【坑 19】测试辅助方法里别再偷偷改参数
+----------------------------------------------------------------
+  本轮有两条测试连续失败，原因都是我写的 healthy(..., now - 12000) 里
+  healthy 内部又减了 100，实际变成 12100。
+  **涉及边界值的测试，必须用 withSlept(NOW - 23999) 这样精确指定**，
+  不要让辅助方法参与计算。
+
+【坑 20】断言"等于常量 X"测不出"常量 X 本身写错了"
+----------------------------------------------------------------
+  要测正确性，就得拿它去实际操作一遍，或者像本轮这样
+  对着真实字节码逐条核对。
+  测试只能防止回归，不能证明模型正确 —— 模型正确性要靠读代码。
+
+
+----------------------------------------------------------------
+七、给下一个智能体的建议
+----------------------------------------------------------------
+
+1. 先跑 :engine:test（91 条断言），全绿再动代码。
+2. 改判定前先看 docs/铁傀儡生成条件-调研v1.md，
+   但要知道那个文件是**第一轮按 Wiki 写的**，其中"附近召唤"那条已被证伪。
+   当前的权威来源是 VersionProfile 里的注释（带字节码出处）。
+3. 界面阶段还没开始。下面五个类就是界面要吃的全部数据契约：
+   ModSettings / Condition / RuleResult / VillagerReport / PanicAnalysis
+4. 需求明确要求"涉及界面布局变化要征得同意"，
+   所以界面阶段**先出布局方案再写代码**。
+5. 每次交付都要打 zip：程序 + 源码 + 中英说明 + 技术说明 + 本文。
+----------------------------------------------------------------
+八、三态设计（第三轮补的关键一条）
+----------------------------------------------------------------
+
+【坑 21】NEVER 同时表示"从没睡过"和"读不到"，这是个陷阱
+----------------------------------------------------------------
+  第一轮 VillagerSnapshot 只有一个 long lastSleptGameTime，
+  用 NEVER 表示"从未睡过"。
+
+  但客户端**读不到** Brain 的 LAST_SLEPT，也只能填 NEVER。
+  于是两种情况撞在一起：
+    真的从没睡过   → 应该显示红叉
+    多人游戏读不到 → 应该显示"无法判定"
+
+  结果就是多人游戏里**每一只村民都画红叉**，而那台机器可能完全正常。
+  这正是我上一轮口头承诺过"宁可显示不知道"，但代码里根本没做到的地方。
+
+  修法：加两个显式标志位 sleepDataKnown / golemMemoryKnown，
+  判定器先看标志位给 UNKNOWN，再看数值。
+
+  ⚠ 连带的一个坑：所有 withXxx 复制方法都必须原样带上这两个标志，
+  漏一个就会把"数据不可得"悄悄变回"从没睡过"。
+  UnknownDataTest.withMethodsPreserveUnknownFlags 专门钉这个。
+
+【坑 22】golemMemoryKnown 漏了比 sleepDataKnown 更危险
+----------------------------------------------------------------
+  读不到傀儡记忆时布尔量恒为 false，直接采信会显示一个**错误的绿勾**
+  （"没看到傀儡，可以刷"），而实际可能有傀儡一直在锁冷却。
+  红色误报会让玩家去查，绿色误报会让玩家什么都查不出来。
+
+【坑 23】数据不可得≠不能给失败归因
+----------------------------------------------------------------
+  一开始我把 primaryFailure 写成"数据不可得就返回 null"，这是过度的。
+  举例：睡眠读不到，但这只村民旁边**根本没有僵尸** ——
+  "没在恐慌"是一个确定成立且可操作的结论（去放只僵尸），藏起来反而没用。
+
+  正确的约束只有两条，已写成断言 failureAttributionIsNeverAnUnknownOrDataMissingEntry：
+    - 归因结果绝不能是 UNKNOWN 状态（统计页不能把"不知道"记成失败）
+    - 归因绝不能是 data_missing 这类"不是问题本身"的代码
+
+【坑 24】单机可以用 getSingleplayerServer() 补上真实数据
+----------------------------------------------------------------
+  客户端拿不到 Brain，但**单机时客户端与服务端同进程**。
+  用 Minecraft.getSingleplayerServer().getLevel(dim) 拿到服务端世界，
+  再用 entityId 映射到服务端村民，就能读到真实 LAST_SLEPT。
+
+  所以采集顺序应该是：
+    1. 单机 → SingleplayerBridge 拿真实数据（体验最好）
+    2. 多人 → 标记"数据不可得"，显示问号
+
+  ⚠ getSingleplayerServer() 在退出世界时会变 null，
+    必须每次重新判断，不能在启动时缓存一次。
+
+【坑 25】统计的"是谁刷的"只能推断
+----------------------------------------------------------------
+  原版 spawnGolemIfNeeded 成功后不告诉任何人是谁成功的。
+  所以 ServerStatsCollector 只能反向找：在傀儡出现位置附近
+  用 wantsToSpawnGolem 找合格村民，取最近的一个。
+  标成 inferred，界面上要说明。精确归因需要 Mixin 进
+  Villager.spawnGolemIfNeeded，留到后续版本。
+----------------------------------------------------------------
+九、界面数据与布局要分开（第四轮）
+----------------------------------------------------------------
+
+【坑 26】"界面最后做"不等于"界面数据也最后做"
+----------------------------------------------------------------
+  需求说界面最后再说。但界面要显示**什么内容**（每行取哪个字段、
+  状态怎么措辞、失败原因怎么拼），这些不是布局，是数据。
+
+  把它们抽成 engine/ui/UiModel 之后有三个好处：
+    1. 界面阶段只负责"把 Row 画到屏幕"，不用再想内容；
+    2. 这些行能在没有游戏的环境里被完整测试（本轮加了 15 条）；
+    3. 换布局时数据层一行都不用改。
+
+  UiModel.Row 只有三个字段：label / value / state。
+  任何布局（竖排列表、两列表格、tooltip）都能用这三个字段画出来。
+
+  ⚠ 刻意**不含**坐标、宽高、颜色 —— 那些属于布局，要等确认。
+
+【坑 27】RowState 必须有 UNKNOWN，不能用 BAD 凑
+----------------------------------------------------------------
+  和 IKON 的三态是同一个问题：数据不可得时如果渲染成 BAD，
+  多人游戏里整页都是红的。UiModel.RowState 特意留了 UNKNOWN，
+  并且测试 unknownRowIsNotBad 钉住"SLEPT 不可得 → UNKNOWN 而不是 BAD"。
+
+【坑 28】配置文件必须能容错，不能让模组起不来
+----------------------------------------------------------------
+  SettingsCodec 的每一条取值都带兜底：
+    - 未知键 → 忽略
+    - 认不出的布尔（maybe）→ 保留默认
+    - 认不出的数字（abc）→ 保留默认
+    - 坏行（没有等号）→ 只跳过那一行
+    - 距离手改成 99999 → 夹到 512，0.1 / 负数 → 夹到 1
+
+  理由：玩家的配置文件被手改坏一格，不应该导致模组完全不工作。
+  SettingsCodecTest 里 6 条容错测试专门钉这个。
+
+【坑 29】设置改了必须"重新应用"，不是改个字段就完
+----------------------------------------------------------------
+  语言的改变要重建 Lang（它会读文件），
+  严格模式的改变要写回 mobRegistry.strictMode，
+  引擎和扫描器最好也重建一次。
+
+  IronFarmClientState.applySettings() 集中做这件事。
+  漏掉任何一项，玩家改完设置会看到"没生效"。
+
+【坑 30】getConfigDir() 不要自己拼 .minecraft 路径
+----------------------------------------------------------------
+  FabricLoader.getInstance().getConfigDir() 能正确处理
+  自定义游戏目录、多实例、以及 .minecraft 不在默认位置的情况。
+  自己拼 File("config/...") 在多实例环境下会写到错的地方。
+
+
+----------------------------------------------------------------
+十、「写了但没接线」是最隐蔽的 bug（第五轮）
+----------------------------------------------------------------
+
+【坑 31】GossipTracker.onGossip 一次都没被调用过
+----------------------------------------------------------------
+  上一轮我写了 GossipTracker，里面有 onGossip(uuid, gameTime) 方法，
+  VillagerCollector 也在读它。**但整个工程里没有任何地方调用 onGossip。**
+
+  后果：recentlyGossiped 永远返回 false，喇叭图标永远显示红叉。
+  而且这个 bug 不会报错、不会崩、不会让测试变红 ——
+  测试只测了"给了时间戳之后能不能算对"，
+  没测"时间戳会不会被写进去"。
+
+  这条比界面 bug 更该优先修：它是**已经声称能用的功能其实完全没工作**。
+
+  【教训】凡是"状态由事件驱动"的设计（tracker / cache / registry），
+  都要加一条**接线检查**：确认写入路径真的存在。
+  本轮加的 GossipWindowContractTest.gossipTrackerIsGone 就是这类断言 ——
+  它检查那个依赖未接线回调的类已经被删掉。
+
+【坑 32】原版有现成字段，就不要自己造状态机
+----------------------------------------------------------------
+  发现 onGossip 没人调用之后，我本来打算 Mixin 进 Villager.gossip。
+  但先翻了 1.21.1 字节码，发现 **lastGossipTime 是个可读字段**：
+
+      private long lastGossipTime;
+
+  而且 gossip() 自己维护它：
+
+      this.lastGossipTime    = gameTime;
+      partner.lastGossipTime = gameTime;
+
+  于是用 AccessWidener 开放这个字段，直接读真实值 ——
+  不需要 Mixin、不需要监听任何事件、也不存在"接线漏了"的问题。
+
+  AccessWidener 三处都要改：
+   1) src/main/resources/ironfarm.accesswidener：
+        accessWidener v2 named
+        accessible field net/minecraft/world/entity/npc/Villager lastGossipTime J
+   2) build.gradle：
+        loom { accessWidenerPath = file('src/main/resources/ironfarm.accesswidener') }
+   3) fabric.mod.json：
+        "accessWidener": "ironfarm.accesswidener"
+
+  产物里确认已 remap（Loom 自动做）：
+      accessWidener  v2  intermediary
+      accessible     field  net/minecraft/class_1646  field_18535  J
+
+【坑 33】闲聊窗口不是 200，是 1200
+----------------------------------------------------------------
+  第一版我拍了个 200 tick 并在注释里老实写了"推断值"。
+  真实值在字节码里：
+
+      if (gameTime >= this.lastGossipTime + 1200) { ... 执行 gossip ... }
+
+  也就是说**同一只村民每 1200 tick 最多闲聊一次**。
+  所以"距上次闲聊 < 1200"正是"这只村民有资格发起闲聊召唤"的窗口，
+  这个数字是原版写死的，不是我们选的。
+
+  【教训】宁可多花十分钟翻字节码，也不要留一个"推断值"在代码里。
+  推断值一旦被当真，后面所有基于它的结论都是错的。
+
+【坑 34】lastGossipTime 的 0 是合法时间，不是"从未"
+----------------------------------------------------------------
+  从没闲聊过的村民 lastGossipTime = 0，而 0 是合法的游戏时间
+  （世界刚创建那一刻）。直接拿 0 参与计算会把"从没闲聊"算成
+  "在 tick 0 闲聊过"，要等到 tick 1200 之后才正确。
+
+  判据：lastGossipTime <= 0 视为从未闲聊。
+  最坏情况是游戏第一 tick 真的闲聊了而没被记录，
+  影响仅限于喇叭图标晚亮 1200 tick，不影响任何判定结论。
+
+
+----------------------------------------------------------------
+十一、怎么证明"这个 jar 能在游戏里跑"（第六轮）
+----------------------------------------------------------------
+
+【坑 35】runServer 对这个模组是**无效证据**
+----------------------------------------------------------------
+  我本来想用 gradle runServer 做无头验证。结果发现：
+  模组的 fabric.mod.json 里 environment 是 "client"，
+  **服务端加载器根本不会加载它**。
+
+  也就是说"runServer 起来了、没崩"什么都证明不了 ——
+  它压根没跑我们的代码。
+
+  这类"看起来验证了、其实没验证"的情况最危险，因为没有报错。
+  必须先确认：被验证的对象真的被加载了吗？
+
+【坑 36】真正有效的替代验证：引用完整性检查
+----------------------------------------------------------------
+  客户端跑不起来（LWJGL/SDL 初始化失败），但有一类问题比"跑不起来"
+  更隐蔽：**remap 错了**。编译期一切正常、jar 也能打出来，
+  可一进游戏就 NoSuchMethodError / NoSuchFieldError。
+
+  JVM 在链接阶段做的事就是"这个方法名+描述符在目标类里存在吗"，
+  所以我们可以提前到构建期做同一件事：
+
+    把模组 jar 里每个 class 的常量池摊开
+      → 取出所有 net/minecraft 的类/字段/方法引用
+      → 逐个到真实的 1.21.1 intermediary jar 里核对
+
+  工具：tools/VerifyReferences.java（JDK 22+ 的 java.lang.classfile）
+  脚本：tools/verify-refs.ps1（已接进 pack.ps1，失败就拒绝打包）
+
+  实测本模组：40 个 MC 类引用 + 36 个类上的成员引用，全部存在 → PASS。
+
+【坑 37】对照用的必须是 intermediary jar，不是 named jar
+----------------------------------------------------------------
+  第一次我拿 named（Mojang 映射）的 jar 去比，结果：
+    FAIL 缺失类引用 39 个（class_304, class_310, class_1646 ...）
+    FAIL 缺失成员引用 2 个
+
+  因为模组 jar 里的引用已经 remap 成 intermediary 名
+  （class_1646 / method_xxxx），而 named jar 里是真实名字
+  （Villager / getBrain）。两者永远对不上。
+
+  正确路径：
+    ~/.gradle/caches/fabric-loom/minecraftMaven/net/minecraft/
+      minecraft-merged-intermediary/<ver>/minecraft-merged-intermediary-<ver>.jar
+
+  ⚠ 注意在 ~/.gradle/caches 下，不在工程的 .gradle/loom-cache 下。
+    工程里那个是 named 版。
+
+【坑 38】成员检查必须沿父类链，否则 34 条全误报
+----------------------------------------------------------------
+  第一版检查器只查"类自己声明的成员"，结果把
+    Player.getBoundingBox()  （声明在 Entity）
+    Villager.blockPosition() （声明在 Entity）
+    LivingEntity.getX()      （声明在 Entity）
+  全部报成缺失，一口气 34 条误报。
+
+  JVM 解析方法引用时是沿父类链找的，检查器也必须沿链找，
+  而且要递归（继承常常是多层的），再加一个"已访问"集合防环。
+
+【坑 39】检查器本身要反验证
+----------------------------------------------------------------
+  一个永远返回 PASS 的检查器等于没有。所以必须故意造一个坏输入，
+  确认它会 FAIL。
+
+  做法：用 java.lang.classfile 直接生成一个引用
+  class_1646.method_999999()J 的 class 文件（这个方法当然不存在），
+  打包成 jar 丢给检查器：
+
+    FAIL 缺失成员引用 1 个
+      member net/minecraft/class_1646.method_999999()J
+    exit=1
+
+  确认它会抓，之后那个 PASS 才有意义。
+  **规矩：任何"守门"性质的检查，都要有一次反验证记录。**
+
+
+----------------------------------------------------------------
+十二、界面实现踩到的四个坑（第八轮）
+----------------------------------------------------------------
+
+【坑 40】children().add() 画得出但点不动
+----------------------------------------------------------------
+  往交易界面加按钮，第一版我用了：
+      ((Screen)(Object)this).children().add(button);
+  编译通过，按钮**也画出来了**，但点它没反应。
+
+  原因：Screen 内部有三张表
+      children    —— 参与渲染与事件分发
+      renderables —— 参与渲染
+      narratables —— 参与朗读
+  children() 返回的是可修改的 List，但**只加它不会进 renderables**。
+  正确做法是 addRenderableWidget，它一次加三张表。
+
+  它本身是 protected，Mixin 里强转调用过不了编译期访问检查
+  （"protected 访问控制"），所以用 AccessWidener 开放：
+
+      accessible method net/minecraft/client/gui/screens/Screen addRenderableWidget
+          (Lnet/minecraft/client/gui/components/events/GuiEventListener;)Lnet/minecraft/client/gui/components/events/GuiEventListener;
+
+  ⚠ AW 的签名必须写**泛型擦除后**的类型。原签名是
+     <T extends GuiEventListener & Renderable & NarratableEntry> T addRenderableWidget(T)
+     擦除后参数与返回都是 GuiEventListener。
+
+【坑 41】getOffers().isEmpty() 会锁死交易界面
+----------------------------------------------------------------
+  判断"这个村民有没有交易界面"，第一版用：
+      !v.isBaby() && !v.getOffers().isEmpty()
+  结果：刚变成图书管理员、还没交易过的村民，offers 是空的，
+  被判定为"没有界面"，右键直接弹状态页 —— **玩家再也打不开交易**。
+
+  正确判据是职业：
+      v.getVillagerData().getProfession() != VillagerProfession.NONE
+  有职业就一定有界面（哪怕列表为空）。
+
+【坑 42】1.21.1 的顶点 API 换了
+----------------------------------------------------------------
+  1.20 及更早：
+      vc.vertex(matrix, x, y, z).color(r,g,b,a).uv(u,v).endVertex();
+  1.21.1：
+      vc.addVertex(pose, x, y, z).setColor(r,g,b,a).setUv(u,v)
+        .setUv2(lightU, lightV).setNormal(nx,ny,nz);
+
+  用旧写法报 "找不到符号 vertex(Matrix4f,float,float,int)"。
+  而且新 API 需要 PoseStack.Pose 而不是 Matrix4f —— 传错也报同类错误。
+
+  另外 1.21.1 的 renderBackground 要 4 个参数
+  （GuiGraphics, mouseX, mouseY, partialTick），单参版是 1.20.5 以前的。
+
+【坑 43】var 不能用在方法参数上
+----------------------------------------------------------------
+  我写 private static void render(var buffers, ...) 想省事，
+  报"此处不允许使用 'var'"。var 只能用于局部变量。
+  这类错误很低级，但混在一堆 API 变更里容易看漏。
+
+【坑 44】引用完整性检查又抓到一次真错误
+----------------------------------------------------------------
+  加完渲染后跑 tools/verify-refs.ps1：
+      FAIL 缺失成员引用 1 个
+        member net/minecraft/class_1916.isEmpty()Z
+
+  class_1916 是 VillagerData，它没有 isEmpty()。
+  我把 MerchantOffers 和 VillagerData 搞混了
+  （getOffers() 返回 MerchantOffers，getVillagerData() 返回 VillagerData）。
+
+  这个错误编译器**抓不到**吗？其实能 —— 但前提是先写到那一步。
+  而如果我当时写的是 getVillagerData().isEmpty()，
+  编译期就会报错。真正危险的是"编译能过但语义错"的情况，
+  比如坑 41 里用了存在的方法但判据不对。
+  所以两道防线都要有：编译器管类型，引用检查管 remap 后的链接。
+
+【坑 45】测试里搜源码要区分注释与代码
+----------------------------------------------------------------
+  OverlayContractTest 里有一条断言"不能出现 getOffers().isEmpty()"，
+  结果因为我**在注释里**解释了"为什么不能用它"而误报。
+
+  修法：写一个粗暴的 stripComments() 去掉 // 与 /* */，
+  只对代码部分做断言。注释里说明原因是可以的，代码里真的调用才不行。
+
+  这类"源码级断言"是刻意的取舍：本机跑不了客户端，
+  只能用"读代码"来验证渲染层的接线。它比不验证强，但要接受它会随重构而更新。
+
+
+----------------------------------------------------------------
+十三、状态只能有一份真源（第九轮）
+----------------------------------------------------------------
+
+【坑 46】静态 IdentityHashMap<Button, Boolean> 当开关状态
+----------------------------------------------------------------
+  设置页第一版为了记住每个按钮的开关值，写了个静态 Map：
+      private static final Map<Button, Boolean> TOGGLE_STATE =
+          new IdentityHashMap<>();
+  有三个问题，只有第一个是"会崩"的：
+
+  1. **内存泄漏**：静态 Map 持有 Button，而按钮随每次 rebuild() 重建、
+     旧按钮既不回收也不移除。玩家来回点标签页就攒一堆。
+  2. **状态有两个来源**：Map 一份、ModSettings 一份。
+     两者不一致时，界面显示的可能不是真实设置值。
+  3. **热重载会错**：手改配置文件后重载，界面按钮还是旧值。
+
+  修法：**ModSettings 是唯一真源**。
+  按钮文本每次点击后从 getter 重新读一次生成：
+      boolean now = !getter.getAsBoolean();   // 翻转的是设置里的真实值
+      setter.accept(now);
+      btn.setMessage(toggleText(labelKey, getter.getAsBoolean()));
+  不额外存任何副本，也就不会不一致。
+
+  这条已写成断言 settingsScreenHasNoStaticToggleState：
+  代码里不许出现 TOGGLE_STATE / IdentityHashMap / Map<Button。
+
+【坑 47】"框画出来了，但玩家不知道哪一格能刷"
+----------------------------------------------------------------
+  可刷范围框第一版只画了 17×13×17 的外框。
+  但玩家看到框之后的下一个问题必然是"框里哪一格真的能刷"——
+  尤其是台面被台阶、水、红石占了一部分的时候。
+
+  引擎的 SpawnScanResult.validPoints() 早就把全部合法点算好了，
+  渲染层只是没用上。现在每个合法点画一个很小的立体十字（黄，0.75 不透明）。
+
+  顺带要加一个缓存：spawnScans（entityId → scan），
+  否则每帧重扫 3757 格，帧率会掉。
+  这个缓存在 clearScanOnly() 里必须一起清 ——
+  否则村民走了、或者玩家退出世界，框会残留。
+
+【坑 48】测试用固定长度窗口截取方法体会误报
+----------------------------------------------------------------
+  我想断言 clearScanOnly 里清了 spawnScans，写成：
+      int idx = code.indexOf("clearScanOnly");
+      String body = code.substring(idx, idx + 600);
+  结果误报"没有清空"。
+
+  原因：stripComments 之后源码位置变了，600 字符窗口跨到了别的方法里。
+  而且 clearScanOnly 的方法体只有 6 行，本就该精确截取。
+
+  修法：写 methodBody(code, "private void clearScanOnly()")，
+  按大括号配对找方法体。**任何"截取一段代码"的测试都不要用固定长度窗口。**
+
+【坑 49】破坏性按钮要二次确认 + 超时
+----------------------------------------------------------------
+  「清空统计」一次误触会丢掉几小时的数据。
+  做成：第一次点变「确定清空？」，3 秒内再点才真清。
+  超时自动解除 —— 否则按钮会一直停在"确定？"状态，
+  玩家过一会儿以为点一下就行，反而更容易误删。
+
+  实现要点：确认状态是**实例字段**（resetArmed/resetArmTicks），
+  不是静态的。理由同坑 46。
+
+
+----------------------------------------------------------------
+十四、持久化与"多人拿不到"的诚实处理（第十轮）
+----------------------------------------------------------------
+
+【坑 50】"关游戏就清零"让整个统计功能白做
+----------------------------------------------------------------
+  统计页显示"刷出多少铁傀儡"，但第一版只在内存里累计。
+  关掉游戏 → 清零。而玩家最想看的就是"挂机一晚上出了多少"。
+
+  修法：StatsCodec + StatsIO，存到 config/ironfarm-stats.txt。
+
+  关键点：**要一个与 start() 语义不同的恢复方法**。
+  start() 会清零（重置统计用），如果拿它来"恢复"，
+  累计数据会被抹掉 —— 等于没修。
+
+  所以 StatsRecorder 新增了 restore(...) 与 restoreFailure(...)，
+  它们写入传入的值而不是清零。测试 restoreDoesNotZeroCounters 专门钉这个。
+
+【坑 51】"关窗口时存"是不可靠的
+----------------------------------------------------------------
+  客户端没有可靠的"退出前"回调：强制关闭、崩溃、杀进程都不触发。
+  所以改成**定期自动存**（600 tick = 30 秒），
+  再叠加"打开统计页时立即存一次"。
+
+  代价是最多丢 30 秒数据，可以接受。
+  这个取舍要写进文档，不能让玩家以为绝对不丢。
+
+【坑 52】多人游戏里统计永远是 0，但界面不说
+----------------------------------------------------------------
+  ENTITY_LOAD 在多人服务器上只对集成服务端生效，客户端收不到。
+  所以多人里"刷出 0 只"是**必然**的，不是机器坏了。
+
+  第一版什么都不说，玩家会去拆机器。
+
+  修法两条：
+    1. statsComplete 标志位（mc.getSingleplayerServer() != null）；
+    2. 统计页顶部显示橙色警告："多人游戏：客户端收不到服务端事件，
+       产量统计不完整"。
+
+  这条与图标灰色的处理是同一个原则：
+  **数据拿不到时，明说拿不到，不要给出一个看起来像结论的数字。**
+
+【坑 53】统计数据坏了也不能让模组起不来
+----------------------------------------------------------------
+  StatsCodec 的容错与 SettingsCodec 一致，但要求更严一点：
+  格式里用 | 分隔 6 个字段，任何一段解析失败就**丢弃整条记录**。
+
+  为什么是丢弃而不是"猜一个值"：错的统计比没有统计更误导人。
+  比如把 count 解析成 0，界面上会出现"某村民失败 0 次"这种荒谬条目。
+
+  已测：
+    villagerId 非法 → 丢
+    count 非法     → 丢
+    字段不足       → 丢
+    reason 为空    → 丢
+    count <= 0     → 丢（restoreFailure 里也挡一次，双重保险）
+    负数计数器     → 夹到 0
+
+
+----------------------------------------------------------------
+十五、静默失败的三道防线（第十一轮）
+----------------------------------------------------------------
+
+【坑 54】Mixin 失败是静默的，必须专门验
+----------------------------------------------------------------
+  编译能过、jar 能打出来、Fabric 加载也不报错（只 warn 一句），
+  但功能就是不生效。三种典型：
+    @Inject(method="init") 写错方法名
+    @Mixin(Xxx.class) 目标类改名
+    @Shadow 字段拼错
+
+  本机跑不起客户端，没法用 -Dmixin.debug.export=true 看真实注入。
+  所以写了 tools/MixinCheck.java + verify-mixins.ps1，
+  对着 named jar 静态核对这三件事。
+
+  为什么用 **named** 而不是 intermediary：
+    源码里写的就是 named 名（@Mixin(MerchantScreen.class)），
+    intermediary 层的 remap 已由 verify-refs.ps1 覆盖。
+    硬要用 intermediary 对照就得自己解析 tiny 的类映射 + 方法映射 +
+    "方法声明在父类上"这三件事 —— 我全踩了一遍（见坑 55），
+    工具比被测对象还复杂。这是典型的过度设计，及时退回来了。
+
+【坑 55】用 intermediary 对照连踩三个坑（记下来免得再走）
+----------------------------------------------------------------
+  1. 类名：源码是 MerchantScreen，jar 里是 class_492
+     → 需要读 mappings 的 "c <intermediary> <named> <official>" 行
+  2. 方法名：源码是 init，jar 里是 method_25426
+     → tiny 的 "m <desc> <intermediary> <named>" 行只登记**被混淆的**成员，
+       原版自己起的名字（init/render/getTitle）在两套命名里同名的，tiny 里根本没有
+  3. 声明类：MerchantScreen.init() 的方法体**声明在 Screen 上**，
+     tiny 只按声明类登记 → 拿 MerchantScreen 去查必然查不到，
+     必须沿父类链找
+
+  第三条是最阴的：前两条修完之后依然报"不存在"，因为错误不在名字，在归属。
+  最后选择放弃 intermediary 路线，改用 named —— 10 分钟就通了。
+
+【坑 56】检查器自己失效，却报 PASS
+----------------------------------------------------------------
+  反验证时我把 @Shadow 的字段名从 leftPos 改成 leftPosTypo，
+  检查器**仍然报 PASS**。
+
+  原因：本工程的 mixin 用的是全限定名
+      @org.spongepowered.asm.mixin.Shadow
+  而检查器只匹配 "@Shadow" → 一个字段都没提取到 → 没有字段要查 → PASS。
+
+  这是"守门员睡着了还举手示意安全"，比没有检查更糟。
+
+  修法：两个名字都认（@Shadow 与 .Shadow）。
+
+  【规矩】任何守门工具，必须做反验证，而且**每种失败模式都要单独反验证一次**。
+  本轮反验证了两项：改坏 @Inject 方法名 → FAIL，改坏 @Shadow 字段 → FAIL。
+  第二项正是靠反验证才发现检查器本身有 bug。
+
+【坑 57】不能"验证了不该验证的东西"
+----------------------------------------------------------------
+  第六轮我想用 gradle runServer 验证模组能不能加载。
+  但模组的 environment 是 client，服务端加载器根本不加载它 ——
+  "runServer 起来了"什么都证明不了。
+
+  现在三道防线各管一层，边界清楚：
+    engine:test      纯逻辑（173 条）
+    verify-refs.ps1  intermediary 层：每处链接引用是否存在于真实 jar
+    verify-mixins.ps1 named 层：@Mixin/@Inject/@Shadow 目标是否真实存在
+
+  仍然没覆盖的：**画面本身**。这个必须真机，没有替代品。
+
+
+----------------------------------------------------------------
+十六、最严重的一个 bug：渲染一帧都没画过（第十二轮）
+----------------------------------------------------------------
+
+【坑 58】注册在 WorldRenderEvents.LAST，consumers() 恒为 null
+----------------------------------------------------------------
+  我把世界渲染注册在 LAST，理由是"排在所有实体之后，图标不会被挡住"。
+  看起来合理，实际是**整个渲染功能一帧都没执行过**。
+
+  Fabric 的 WorldRenderContext.consumers() javadoc 原文：
+
+    This property is null before BEFORE_ENTITIES and after BEFORE_DEBUG_RENDER
+    because the consumer buffers are not available before or drawn after that
+    in vanilla world rendering.
+
+  而事件顺序是：
+    BEFORE_DEBUG_RENDER → AFTER_TRANSLUCENT → LAST → END
+
+  所以 LAST 阶段 consumers() 一定是 null。而我代码里有一句
+  "防御性"的 if (buffers == null) return; —— 它每次都会命中，
+  方法直接返回，**一帧都没画，且不报任何错**。
+
+  这是最危险的一类 bug：
+    - 编译通过
+    - 引用检查通过
+    - 单元测试通过（因为我测的是"代码里有没有这行"，不是"画没画出来"）
+    - 进游戏也没有任何报错
+  表现就是"模组好像装上了，但什么都没显示"。
+
+  修法：注册到 AFTER_TRANSLUCENT。此时 consumers 可用，
+  且它在实体之后、云与天气之前，图标依然不会被实体遮挡。
+  事件名里的 "translucent" 指的是"半透明物体画完之后"，
+  不是"这里只能画半透明内容"。
+
+  【教训】那句 null 判断本身就是"把错误藏起来"。
+  写防御性判断时要想清楚：这个 null 是**不可能发生的边界**，
+  还是**设计错误的征兆**？如果是后者，加判断只是让 bug 更晚被发现。
+
+  现在注释里写明了原因，并加了 RenderWiringTest 钉住：
+  代码里不许出现 WorldRenderEvents.LAST。
+
+【坑 59】text 层的顶点格式没有法线
+----------------------------------------------------------------
+  RenderType.text() 用 POSITION_COLOR_TEX_LIGHTMAP（Position/Color/UV0/UV2），
+  没有 NORMAL。我在上面调了 setNormal ——
+  BufferBuilder.setNormal 内部先 beginElement(NORMAL)，
+  当前格式不含该元素时返回 -1 并**静默跳过**。
+
+  不崩，但那行是死代码，还让后来人以为要算法线。
+  （lines() 的格式是 POSITION_COLOR_NORMAL，那里法线是必需的，别删错。）
+
+  已用 javap 核实两种格式的字段。
+
+【坑 60】"源码级断言"证明不了"真的能跑"
+----------------------------------------------------------------
+  这一轮再次印证：我的测试大多是
+      assertTrue(code.contains("COLOR_OK"))
+  这类断言。它们能防止回归，但**证明不了渲染发生了**。
+
+  坑 58 就是活证据：178 条测试全绿的时候，
+  渲染代码一帧都没执行过。
+
+  所以对"必须真机才能确认"的部分，我要在交付说明里明确标注，
+  不能拿测试数量冒充验证深度。
+
+
+【坑 61】"改了一处"不等于"修好了" —— 必须回到契约本身核对
+----------------------------------------------------------------
+  上一轮我把渲染事件从 LAST 改到 AFTER_TRANSLUCENT，就宣布修好了。
+  这一轮回去核对 Fabric 的 javadoc，发现**还是 null**。
+
+  完整事件顺序（WorldRenderEvents javadoc 原文）：
+    START → AFTER_SETUP → BEFORE_ENTITIES → AFTER_ENTITIES
+          → BEFORE_BLOCK_OUTLINE → BLOCK_OUTLINE
+          → BEFORE_DEBUG_RENDER → AFTER_TRANSLUCENT → LAST → END
+
+  consumers() 契约：
+    null before BEFORE_ENTITIES and after BEFORE_DEBUG_RENDER
+
+  AFTER_TRANSLUCENT **排在 BEFORE_DEBUG_RENDER 之后** → 依然 null。
+  两次都错，表现一模一样：不报错、不显示。
+
+  真正的可用区间是：
+    BEFORE_ENTITIES ≤ 事件 ≤ BEFORE_BLOCK_OUTLINE
+
+  而 matrixStack() 契约是"只有 AFTER_ENTITIES 及之后才非 null"。
+  两条合起来，**唯一可用的事件是 AFTER_ENTITIES**。
+
+  【教训】
+  1. 修 bug 时不要用"看起来更合理"的替代方案，要去核对**契约原文**。
+     我两次都是凭直觉挑事件名（LAST 听起来最晚最安全，
+     AFTER_TRANSLUCENT 听起来在半透明之后），两次都错。
+  2. 一个有 N 个选项的 API，要把**所有选项的适用性**列成表，
+     而不是挑一个就试。本轮测试改成禁掉全部不可用事件：
+
+        renderIsNotRegisteredOnEventsWhereConsumersIsNull
+          → 禁 LAST / AFTER_TRANSLUCENT / END / START / AFTER_SETUP
+
+     这样下次谁再挑错，测试会直接变红。
+
+【坑 62】BEFORE_DEBUG_RENDER 是"直接写帧缓冲"，不适用 MultiBufferSource
+----------------------------------------------------------------
+  查证时顺手记下：BEFORE_DEBUG_RENDER 的 javadoc 说
+    "renders in this event are expected to be drawn directly and
+     immediately to the framebuffer"
+
+  也就是说那个事件**本来就不是给你用 consumers 的**，
+  它要求你自己直接写 GL。我最初想"那挂 BEFORE_DEBUG_RENDER 吧"也是错的。
+
+  这也解释了为什么 consumers 在它之后变成 null ——
+  因为从那时起，缓冲已经被 flush 掉了。
+
+
+----------------------------------------------------------------
+十七、用户截图暴露的三个真实 bug（第十四轮）
+----------------------------------------------------------------
+
+【坑 63】.lang 不是 Minecraft 的格式，界面全是原始键名
+----------------------------------------------------------------
+  用户截图：设置页所有按钮显示
+      ironfarm.gui.settings.master: ironfarm.gui.settings.on
+  一个字的翻译都没有。
+
+  原因：我按 Bukkit/Forge 时代的习惯写了 zh_cn.lang（key=value 文本），
+  164 条，中英各一份。但 Minecraft（Fabric 同样）只读
+      assets/<modid>/lang/en_us.json
+      assets/<modid>/lang/zh_cn.json
+  **JSON 格式**。原版自己就是 assets/minecraft/lang/en_us.json（已核实）。
+
+  更糟的是：我的测试专门断言过"两份 .lang 的键集合一致"——
+  那是自己跟自己比对，属于自说自话。编译器、引用检查、
+  186 条测试全绿，游戏里一个字都不显示。
+
+  【教训】
+  1. "我的资源格式对不对"这类问题，必须**对照原版自己的文件**验证，
+     不能只在自己的产物之间做一致性检查。
+     原版 jar 里 assets/minecraft/lang/en_us.json —— 看一眼就知道。
+  2. 一致性测试（A 与 B 相同）永远不能替代**正确性测试**（A 是不是那个格式）。
+
+  修法：
+  - 保留 .lang 作为可读源文件（没有引号逗号，中文不用转义，好维护）
+  - gradle 加 langToJson 任务，在 processResources 之前生成 .json
+  - pack.ps1 加关卡：jar 里必须至少有 2 份 lang/*.json
+  - LangFormatTest 直接检查 **JSON**：格式合法、键集合与 .lang 一致、
+    设置页用到的 14 个键在两份 JSON 里都存在、值不等于键名本身
+
+【坑 64】固定尺寸的面板在低分辨率下超出屏幕
+----------------------------------------------------------------
+  同一次截图还暴露：标签按钮、关闭按钮都看不见，
+  六个开关被左右裁掉一半。
+
+  原因：面板写死 400×300，而 1280×720 窗口 + GUI scale 4 时
+  GUI 空间只有 320×180。面板比屏幕还大：
+  左上角算出来是负数 → 标签栏被顶到屏幕外，右侧被裁掉。
+
+  修法：panelWidth()/panelHeight() 取
+      min(首选值, 屏幕可用空间 - 边距)
+  并且**render 与控件布局用同一套函数**，避免背景和按钮对不上。
+
+  【教训】Minecraft 的 GUI 坐标是"GUI 像素"，
+  不是屏幕像素。写死尺寸前先想：GUI scale 4 + 720p 会剩多少？
+  本工程以后所有界面都要用"取较小值"的写法。
+
+【坑 65】截图比测试有用
+----------------------------------------------------------------
+  上一轮我说"179 条测试全绿"，这一轮用户一张截图就找出三个 bug，
+  其中两个是"整个功能完全不可用"级别的。
+
+  这三个 bug 的共同点：**它们都不是逻辑错误**，
+  而是"资源格式/尺寸约定"错误。这类错误：
+    - 编译器不管（字符串内容它不检查）
+    - 引用检查不管（不涉及符号）
+    - 单元测试不管（我测的是自己写的东西）
+
+  唯一有效的发现方式是**真的跑起来看一眼**。
+  以后凡是"界面/资源"相关的改动，交付时必须明确标注
+  "本轮未真机验证"，不能拿测试数量当验证深度。
+
+
+----------------------------------------------------------------
+十八、自动部署到测试客户端（第十五轮）
+----------------------------------------------------------------
+
+【约定】构建产物自动部署到
+    D:\1.21.1F-NF\.minecraft\versions\1.21.1-Fabric\mods
+由 tools/pack.ps1 第 7 步完成，不再手工拷贝。
+
+【坑 66】旧版本不删，游戏直接启动失败
+----------------------------------------------------------------
+  Fabric 遇到同一个 mod id 的两个 jar，不是"选新的"，而是：
+      Duplicate mod id: ironfarm
+  然后启动失败。
+
+  所以部署逻辑必须是"先删同前缀的旧 jar，再复制新的"，
+  而且判断要按 **ironfarm-fabric-*.jar** 这个前缀，
+  不能只按当前版本号 —— 否则 0.13.0 永远删不掉。
+
+【坑 67】部署要用"打包时取到的那个 jar"
+----------------------------------------------------------------
+  第一版我在部署那一步重新 Get-ChildItem 找 jar，
+  结果 libs 目录里有多份时可能挑错（或者变量作用域没接上，
+  实际表现是"删了旧的但没复制新的" —— 目录一度变成空的）。
+
+  修法：在 # 6) 打包 之前就把 $deployedJar 固定下来，
+  后面打包和部署共用同一个变量。
+
+  【教训】同一次运行里要用的东西，**取一次、存下来、后面都引用它**。
+  反复重新查找 = 引入了"两次查找结果不同"的可能。
+
+【验证方式】部署后必须比对哈希：
+    (Get-FileHash 源).Hash -eq (Get-FileHash 部署).Hash
+  本轮结果：一致 True，166524 bytes，sha 前 16 位相同。
+
+【部署后自检清单】每次构建后自动确认：
+    - jar 里有 assets/ironfarm/lang/zh_cn.json 与 en_us.json
+    - jar 里有 assets/ironfarm/icon.png（fabric.mod.json 引用了它）
+    - jar 里有 assets/ironfarm/textures/icon_atlas.png（头顶图标用的图集）
+    - jar 里有 META-INF/jars/ironfarm-engine.jar（JiJ 的引擎）
+    - 引擎 jar 里也有 lang/*.json（它是独立的 resources srcDir）
+
+
+----------------------------------------------------------------
+十九、真机反馈与 billboard 矩阵（第十六轮）
+----------------------------------------------------------------
+
+【好消息】设置页已经完全正常了。
+  用户截图确认：中文显示、面板不超屏、三个标签、关闭按钮全部可见。
+
+【坑 68】billboard 不能自己算 yaw/pitch
+----------------------------------------------------------------
+  头顶图标画不出来的原因：我在 drawIcon 里手动做了
+      pose.mulPose(Axis.YP.rotationDegrees(-camYaw));
+      pose.mulPose(Axis.XP.rotationDegrees(camPitch));
+  想当然地"撤销相机旋转"。
+
+  但 PoseStack 进入世界渲染阶段时，**已经包含了相机朝向的逆变换**
+  （世界渲染矩阵本身就是相机空间）。
+  再叠加一次 = 转了两次 → 四边形侧对镜头 → 投影面积为零 → 看不见。
+
+  正确做法：用 Camera.rotation() 这个四元数取逆（conjugate）：
+      pose.mulPose(new Quaternionf(cam.rotation()).conjugate());
+  这与原版渲染名字牌、粒子用的是同一个思路。
+
+  【教训】"我要抵消相机的旋转"这种直觉，在游戏渲染里经常是错的，
+  因为矩阵栈的起点不是单位矩阵。先搞清楚"我拿到的 pose 处在什么坐标系"，
+  再决定要不要乘。查 Camera 有没有现成的 rotation() 比自己算 yaw/pitch 可靠。
+
+【坑 69】两个 mods 目录，日志看错了一次
+----------------------------------------------------------------
+  测试客户端结构是：
+      .minecraft/mods/                        ← 全局
+      .minecraft/versions/1.21.1-Fabric/mods/ ← 这个实例的
+      .minecraft/versions/1.21.1-NeoForge/mods/
+  我第一次去读 .minecraft/logs/latest.log，那是 **NeoForge** 的日志，
+  里面当然没有 ironfarm，差点误判成"模组根本没加载"。
+
+  正确的日志在：
+      .minecraft/versions/1.21.1-Fabric/logs/latest.log
+
+  从那里面看到关键几行，证明加载是成功的：
+      Loading 58 mods:
+        - ironfarm 0.14.0
+      [ironfarm] settings loaded from .../versions/1.21.1-Fabric/config/ironfarm.properties
+      [ironfarm] client initialized: overlay + status screen ready
+
+  配置也在 **实例目录** 下，不是 .minecraft/config：
+      .minecraft/versions/1.21.1-Fabric/config/ironfarm.properties
+
+  【教训】"文件在哪"必须实证。多个实例共用一个 .minecraft 时，
+  日志/配置/mods 全都在各自的版本目录里。
+
+【坑 70】真机日志比任何测试都值钱
+----------------------------------------------------------------
+  这一轮最有价值的三条信息全部来自 latest.log：
+    1. 模组确实加载了（不是"没装上"）
+    2. 加载顺序里有 ironfarm_engine（JiJ 正常）
+    3. 进世界 6 秒就退出了 —— 这解释了为什么可能没看到图标
+       （也可能只是用户截完图就退了）
+
+  所以新增了 Diagnostics：
+    debugLog=true 时每 10 秒打一行三层数据
+      SCAN   villagers= reports= singleplayer= dataComplete=
+      RENDER callbacks= nullConsumers= emptyList= iconsDrawn=
+    任何一层是 0，问题立刻定位到那一层。
+    config 里加 debugLog=true 即可开启（0.15.0 默认开）。
+
+【坑 71】统计页内容画到面板外
+----------------------------------------------------------------
+  用户截图："信息页边被遮蔽"。
+  原因：只有最后一个区块做了"超出就 break"，前面的失败列表没有，
+  条目一多就直接画到面板边框和"清空统计"按钮上。
+
+  修法：所有区块统一用 limitY 判断（面板底部留 26px 给按钮），
+  超出的条目计数，末尾显示"还有 N 条未显示（窗口太小）"。
+
+
+【坑 72】billboard 的正确答案只在原版字节码里
+----------------------------------------------------------------
+  图标终于显示了（用户截图），但"像一片纸，只有正面能看到"、
+  而且方向歪斜。原因是 billboard 又错了一次。
+
+  错误清单（同一件事错了三次）：
+    1. 手算 Axis.YP.rotationDegrees(-camYaw) + XP.rotationDegrees(camPitch)
+       → 完全看不见（转两次，四边形侧对镜头）
+    2. 用 camera.rotation() 但取共轭 conjugate()
+       → 能看见，但歪斜、侧看变一条线、方向颠倒（多转了 180°）
+    3. 正解：pose.mulPose(camera.rotation())  ← 不取共轭
+
+  证据（javap 核实）：
+    EntityRenderDispatcher.prepare():
+        this.cameraOrientation = camera.rotation();     // 直接赋值
+    EntityRenderer.renderNameTag():
+        poseStack.mulPose(this.entityRenderDispatcher.cameraOrientation());
+        poseStack.scale(0.025f, -0.025f, 0.025f);       // Y 是负的
+
+  【教训】billboard / 矩阵 / 顶点朝向这类问题，
+  **不要靠推理，去反编译原版里做同一件事的代码**。
+  名字牌就是"悬浮在实体头上的文字"，需求完全一样，
+  它的做法就是标准答案。我前两次都是凭直觉推导，两次都错。
+
+【坑 73】一次改两处 = 无法定位
+----------------------------------------------------------------
+  发现方向不对时，我同时改了两个地方：
+    - 去掉 conjugate（billboard 修正）
+    - 把四边形顶点的 Y 取负（模仿原版 scale 的负 Y）
+  然后意识到：这两处**互相影响**，如果结果不对，
+  我无法判断是哪一处造成的，甚至可能两处都错但恰好抵消一部分。
+
+  于是回退了 Y 翻转，**只保留 billboard 修复**，
+  重新打包给用户测。确认 billboard 对了之后，
+  如果仍有上下颠倒，再单独改 Y。
+
+  【规矩】调试时一次只改一个变量。
+  尤其是"方向/坐标"这类问题，多个修正在数学上可能互相叠加或抵消，
+  同时改会让你失去唯一的判断依据。
+
+【诊断日志立功了】
+  latest.log 里这三行直接排除了数据层：
+    SCAN villagers=1 reports=1 singleplayer=true dataComplete=1/1
+    RENDER callbacks=574 nullConsumers=0 emptyList=0 iconsDrawn=573
+  说明：村民扫到了、数据完整、渲染回调在跑、图标在画。
+  问题 100% 在矩阵上 —— 省掉了大量猜测。
+
+
+【坑 74】三个图标各自旋转 → 不共面 → 互相遮挡
+----------------------------------------------------------------
+  用户反馈："单个图标旋转，三个没有组合旋转，因此会出现互相遮挡。"
+
+  根因：三次独立的 drawIcon，每次内部各自 mulPose(billboard)，
+  而横向偏移 translate(±step, 0, 0) 是在**世界坐标系**里做的。
+  于是：
+    图标1 → 转到平面A → 再在世界X轴偏移
+    图标2 → 转到平面B（同一个四元数，但因为偏移发生在旋转之前，
+            实际朝向算出来不同）
+    图标3 → 平面C
+  从上往下看时三个平面互成角度，侧面看就互相穿插。
+
+  正解：**先整组旋转，再在局部坐标里排布**。
+    pose.pushPose();
+    pose.mulPose(billboard);          // 只旋转一次
+    pose.translate(-step,0,0); emit(0);
+                               emit(1);
+    pose.translate(+step,0,0); emit(2);   // 在已旋转的坐标系里偏移
+    pose.popPose();
+  三个四边形天然共面，永远不会互相遮挡。
+
+  【一般规律】一组要"一起面向镜头"的东西，
+  旋转必须提到组外做一次。逐个旋转再逐个偏移，
+  偏移方向会被各自的旋转带偏。
+
+【坑 75】V 轴方向：上 = 0，下 = 1
+----------------------------------------------------------------
+  用户反馈："图标还是上下颠倒或者说垂直翻转了。"
+
+  根因：我把"屏幕上方"的顶点（y = +h）配了 v1 = 1.0（纹理底部）。
+  正确是 v0 = 0.0（纹理顶部）。
+
+  正确对应：
+    左上 (-h, +h) → (u0, v0)
+    左下 (-h, -h) → (u0, v1)
+    右下 (+h, -h) → (u1, v1)
+    右上 (+h, +h) → (u1, v0)
+
+  【教训】UV 的 v=0 是纹理**顶部**（不是底部）。
+  这和 OpenGL 的纹理坐标约定（原点在左下）相反，
+  但 Minecraft 的 PNG 加载后 v=0 对应图像第一行。
+  拿不准时看原版怎么做，或者先用一张不对称的测试图（比如箭头）验证。
+
+【本轮修复策略】
+  两个 bug 一起改，但**分别独立**：
+    - 共面问题：改结构（drawIconRow 整组旋转）
+    - 颠倒问题：改 UV 映射（v0/v1 对调）
+  这两处不互相影响（一个动矩阵、一个动纹理坐标），
+  所以可以同时改，不会像坑 73 那样互相掩盖。
+
+  已加 IconBillboardTest 5 条钉住：
+    - 不许 conjugate
+    - 不许手算 rotationDegrees / Axis.YP
+    - drawIconRow 里 mulPose(billboard) 只能出现一次，且必须在 emitIcon 之前
+    - 渲染层必须调用 drawIconRow
+    - 左上角顶点必须配 (-h, +h, z, u0, v0)
+
+
+【坑 76】同一个 bug 在两处重复：固定尺寸
+----------------------------------------------------------------
+  用户："右键村民信息，和统计信息被遮挡问题。症状一样。"
+
+  "症状一样"是关键词 —— 说明是同一个根因，只是发生在两个类里：
+    设置页 SettingsScreen   写死 400×300（第十四轮改成了自适应）
+    状态页 VillagerStatusScreen 写死 320×240（**没改**，本轮才补）
+    统计页（在 SettingsScreen 里）没有滚动，内容超出就画到面板外
+
+  GUI scale 3 的 720p 下，GUI 空间只有 427×240。
+  状态页 240 高 → 内容区 = 240 - 16(标题) - 26(底部) ≈ 198px，
+  而状态页实际有 20+ 行，每行 11px → 至少 220px，必然溢出。
+
+  【教训】一个 bug 在 A 处修好之后，**必须搜一遍同类代码**。
+  这类"同一模式复制到多个类"的问题，只修看到的那个等于没修完。
+  本轮把两个页面都改成自适应，并写了 GuiSizingTest 同时覆盖两者。
+
+【坑 77】listScroll 字段定义了但从未使用
+----------------------------------------------------------------
+  SettingsScreen 里有个 private int listScroll = 0;
+  还在标签切换时 this.listScroll = 0;
+  看起来"已经实现了滚动"。实际上渲染时完全没用它，
+  mouseScrolled 也没写。
+
+  这是第二次踩「写了但没接线」（第一次是 GossipTracker.onGossip）。
+
+  【检测手段】静态检查"字段是否只被赋值、从未被读取"。
+  本轮的 listScrollIsActuallyUsed 测试就是干这个的：
+  把声明本身挖掉，再断言剩余代码里仍然出现该字段名
+  （即存在读取或写入点）。
+
+【坑 78】测试又一次抓到了我漏掉的接线
+----------------------------------------------------------------
+  settingsStatsTabSupportsScrolling 一开始是 FAIL 的：
+  mouseScrolled 的插入没匹配到锚点，静默失败了
+  （PowerShell 的 .Replace 找不到目标时**不报错**，直接原样返回）。
+
+  这类"字符串替换静默失败"很危险：
+  我以为什么都做了，实际一个字都没改。
+
+  【规矩】用脚本改代码后，**必须立刻 grep 确认结果**，
+  不能只看脚本说"成功"。本轮后面改成
+  "先 ReadAllLines → 逐行插入 → WriteAllLines"，
+  并打印 inserted=True/False 来确认。
+
+
+【坑 79】render() 里调了两次 renderBackground，第二次盖住所有内容
+----------------------------------------------------------------
+  用户："可滚动查看，但是依然被遮蔽。似乎和关闭按钮图层有关。"
+
+  "和关闭按钮图层有关"这个直觉方向是对的 —— 确实是绘制顺序问题。
+
+  两个界面都写成了：
+      render() {
+          renderBackground(...);     // ① 自己画一次
+          画面板 + 全部内容           // ②
+          super.render(...);         // ③ ← 又画一次背景，盖住 ②
+      }
+
+  而 Screen.render(...) 的内部实现（javap 核实）就是：
+      1. renderBackground(g, mouseX, mouseY, partialTick)
+      2. 遍历 renderables 画所有控件（含"关闭"按钮）
+
+  所以第 ③ 步 = 把半透明黑背景重画在内容之上。
+  表现：面板蒙一层暗色、右侧绿色文字发暗、按钮浮在内容上面。
+
+  原版 AbstractContainerScreen.render 的顺序是：
+      super.render(...);          // 先背景 + 按钮
+      ……再画自己的内容……
+  照抄即可。
+
+  【教训】写 Screen 子类时，先确认 super.render() 到底做了什么。
+  MC 的 Screen.render 不是空方法，它自己会画背景和控件。
+  "我先画内容、最后调 super"这种顺序看起来"确保背景在最下面"，
+  实际正好相反。
+
+  已加 ScreenRenderOrderTest 5 条钉住：
+    - super.render(...) 必须出现在第一个 g.fill(...) 之前
+    - 自己不许再调 renderBackground(...)
+    - super.render(...) 只许出现一次
+
+【同一 bug 又一次出现在两个类里】
+  和坑 76 完全一样的模式：
+  设置页改了，但状态页漏了；这次是两个页面都有这个顺序错误，
+  一起改掉，并用**同一组测试同时覆盖两个文件**，
+  避免下次漏掉其中一个。
+
+  测试写法上做了改进：
+  ScreenRenderOrderTest 里的断言对两个文件跑同一个循环：
+      for (String f : new String[]{"gui/VillagerStatusScreen.java",
+                                   "gui/SettingsScreen.java"})
+  这样新增界面时只要往数组里加一项，就自动被覆盖。
+
+
+【坑 80】崩溃：ClipContext 传 (Entity) null，一放僵尸就 NPE
+----------------------------------------------------------------
+  用户："我放下僵尸崩溃了。"
+
+  日志：
+    java.lang.NullPointerException: Cannot invoke
+        "net.minecraft.class_1297.method_21752()" because "$$0" is null
+      at net.minecraft.class_3727.<init>(class_3727.java:42)   ← ClipContext
+      at WorldSightQuery.clearLineOfSight(WorldSightQuery.java:40)
+      at PanicResolver.analyze(...) → rescan → tick
+
+  根因：ClipContext 有两个构造器
+      ClipContext(Vec3, Vec3, Block, Fluid, Entity)
+      ClipContext(Vec3, Vec3, Block, Fluid, CollisionContext)
+  我写了 (Entity) null 想表达"没有实体"。
+  但 Entity 版构造器内部**立刻**调 entity.getBoundingBox()（method_21752），
+  传 null 就是必然 NPE。
+
+  为什么平时不崩、一放僵尸就崩：
+  那段代码只在"有怪物 → 需要做视线检测"时才执行。
+  平时没有恐吓源，永远走不到；放下僵尸立刻命中。
+
+  【规矩】任何接受 Entity 的 MC API，都假设它非 null。
+  要"没有实体"的语义，去找接受上下文对象的重载
+  （CollisionContext / CollisionGetter / Level），不要强转 null。
+
+  已加 SightQueryCrashTest 3 条，其中一条是**全工程扫描**：
+  任何 .java 里出现 (Entity) null 都算失败。
+  这样以后新代码也不会再犯。
+
+【坑 81】"按钮没了样式" = 底板画在了按钮之后
+----------------------------------------------------------------
+  上一轮我把 super.render() 挪到最前面（修"内容被遮蔽"），
+  然后紧接着自己画面板底板 fill ——
+  于是底板盖住了 super.render 刚画好的所有按钮。
+
+  用户："能看到信息了，但是所有按钮没了按钮样式。"
+
+  这是典型的"修一个问题引入另一个问题"，
+  因为两个问题的正确解其实在**同一个地方**。
+
+  正确的三层结构：
+      ① renderBackground()  ← 整屏暗化 + 面板底板 + 标题栏底色
+      ② super.render(...)   ← 画所有控件（按钮浮在底板上，样式完整）
+      ③ 画内容（scissor 裁剪）
+
+  关键点：**不透明的面板底板属于"背景"，必须放进 renderBackground()**。
+  放在 render() 里，无论放 super.render 之前还是之后都不对：
+      之前 → 被 super.render 里的 renderBackground 盖住（旧 bug）
+      之后 → 盖住 super.render 画的按钮（本轮 bug）
+
+  【教训】修渲染顺序问题时，不要只调整"调用先后"，
+  要先想清楚**每块内容属于哪一层**：
+    背景层（renderBackground）/ 控件层（super.render）/ 内容层（自己画）/ 提示层（tooltip）。
+  归错层，怎么调顺序都会有一个被盖住。
+
+【测试债务：改对了要同步改测试】
+  改完结构后，旧的 statusScreenCallsSuperRenderFirst 失败了 ——
+  它断言"render() 里应当有 g.fill"，而底板已经搬走了。
+
+  这不是回归，是**测试描述的实现细节过时了**。
+  改成断言更本质的东西：
+    - super.render(...) 之前不许有任何绘制（g.fill / drawString）
+    - 底板必须在 renderBackground 里
+    - super.render 只能出现一次
+  这样的断言在重构后依然成立。
+
+
+【坑 82】加粗线条不能用 glLineWidth
+----------------------------------------------------------------
+  用户："各种射线和边框太细了，加粗一倍试试。"
+
+  第一反应是 RenderSystem.lineWidth(2.0f) —— 这个 API 存在，
+  但**不可靠**：
+    - RenderType.lines() 画的是 GL_LINES
+    - OpenGL **core profile** 把线宽钳制为 1.0（GL_ALIASED_LINE_WIDTH_RANGE
+      在很多驱动上是 [1,1]）
+    - 调 glLineWidth(2) 要么被忽略，要么抛 GL_INVALID_VALUE
+
+  正确做法：**把线段展开成四边形**（billboard strip）。
+
+  算法：
+    1. 取线段方向 n = normalize(p2 - p1)
+    2. 取"线中点 → 摄像机"方向 v
+    3. 展开方向 s = v × n（垂直于视线，落在屏幕平面内）
+    4. 四个角 = 两端点 ± s * (width/2)
+
+  这样粗细是真实的几何宽度：
+    - 任何驱动、任何 OpenGL 版本都一致
+    - 远处自动变细（透视），符合直觉
+    - 想调粗细只改一个常量
+
+  顶点格式：用 RenderType.debugQuads()，它是 POSITION_COLOR
+  （只有位置和颜色，没有 uv / 法线）。
+  所以顶点只能 addVertex + setColor，写 setUv/setNormal 是死代码。
+
+  实现位置：IconRenderer.LINE_WIDTH (0.055) × LINE_WIDTH_SCALE (2.0)
+  = 实际 0.11 格。
+
+【退化情况要处理】
+  当视线方向与线段方向平行时（正对着线看），叉积长度为 0，
+  展开方向算不出来。此时随便取一个垂直方向即可 ——
+  反正这时整条线在屏幕上只是一个点，怎么展开都看不出来。
+  但**必须处理**，否则会出现 NaN 顶点，整批顶点数据可能被丢弃。
+
+【测试债务又一次】
+  RenderWiringTest.lineRenderingDoesSetNormal 失败了 ——
+  它断言"lines 层必须 setNormal"，那是旧实现（POSITION_COLOR_NORMAL）的要求。
+  改成四边形后格式变成 POSITION_COLOR，法线反而成了死代码。
+
+  又一次印证：**断言实现细节的测试会在重构后失效**。
+  所以断言要尽量贴着"为什么"写：
+    旧：「必须调 setNormal」  → 描述实现
+    新：「不能调 setNormal，因为 debugQuads 没有法线」 → 描述约束
+  后者在换 RenderType 时才需要改，而且改的时候会想一遍格式对不对。
+
+
+----------------------------------------------------------------
+二十、范围框闪烁与生命周期统计（第二十五轮）
+----------------------------------------------------------------
+
+【坑 83】叠加了"聪明"的过滤条件，结果功能变得不可用
+----------------------------------------------------------------
+  用户："检测铁傀儡范围和刷铁傀儡范围不知道为什么有时候显示，有时候没有。
+        只要打开选项就长期显示。"
+
+  原因是我自己加的过滤：
+      if (!r.hardConditionsMet()) continue;
+      if (!r.panicking() && !gossip) continue;
+
+  当时理由写的是"避免满屏框"。但这个过滤有两个根本问题：
+    1. panic / gossip 状态是逐 tick 变化的 → 框跟着一闪一闪
+    2. 它与开关的用途**完全无关**：玩家打开"显示可刷范围"
+       是想**规划机器布局**，跟村民此刻有没有被恐吓毫无关系
+
+  【教训】给可视化加过滤条件前，先问："这个条件的依据和用户开这个开关的
+  目的是同一件事吗？"如果不是，就不该加。
+  "避免满屏"是性能/观感问题，应该用透明度、线宽、只画准星附近去解决，
+  而不是用一个语义上无关的过滤把框变成薛定谔的框。
+
+【坑 84】存活时长用 lastSeen 算，系统性偏小
+----------------------------------------------------------------
+  新指标"平均存活时长"第一版写成：
+      ticksAlive() { return lastSeen - firstSeen; }
+
+  lastSeen 只在"还看得见"时更新。傀儡消失的那一次观察，
+  它已经不在实体列表里了，所以 lastSeen 停在倒数第二次。
+  结果：存活时长被低估，而且低估的量正好约等于"最后一次观察间隔"。
+
+  测试 normalGolemRecordsBothSamples 抓到了：
+      期望 200 tick，实际 40 tick（恰好等于离开检测范围的时间）。
+
+  修法：用 now（消失那一刻）而不是 lastSeen：
+      ticksAlive(now) { return now - firstSeen; }
+
+  【教训】凡是"结束时间"，都要用**检测到结束的那一帧**，
+  不能用"最后一次还活着的时间"。
+
+【坑 85】测试期望值写错，比代码错误更难发现
+----------------------------------------------------------------
+  multipleGolemsAverageCorrectly 改了之后仍然 FAIL：
+      期望 20.0，实际 15.0
+
+  查下来是**我的测试写错了**：傀儡1 在 t=10 那次 observe 就已经
+  不在检测范围内（insideDetector 返回 false），不是注释里写的 t=20。
+
+  代码是对的，测试的期望值错了。
+
+  【教训】写测试时，期望值要从**代码的实际语义**推导，
+  不能凭"我觉得应该是这样"。这次是断言失败暴露的；
+  如果反过来（代码对、测试也对但碰巧相等），就会掩盖真问题。
+
+【坑 86】PowerShell here-string 反复污染 Java 源码
+----------------------------------------------------------------
+  本轮有 5 次因为 here-string 的引号处理不当，
+  往 .java 里写进了多余的单引号，导致"未结束的字符文字"。
+
+  典型现象：
+      '    /**          ← 行首多了单引号
+      out.write(...);  ← 行尾多了单引号
+
+  教训：
+    1. 改 Java 源码优先用 edit 工具（精确匹配，不会引入杂字符）
+    2. 必须用脚本批量改时，改完**立刻全工程扫描**：
+         Get-ChildItem ... | Select-String -Pattern "(^'|\+'$|;'$)"
+    3. here-string 里不要放含引号的代码片段
+
+  本轮最后加了一条固定的扫描命令，改完就跑一次，很快能发现。
+
+【新增功能：铁傀儡生命周期两个指标】
+  · 平均离开检测范围用时 —— 收集系统灵不灵敏
+  · 平均存活时长       —— 有没有傀儡被卡住/被打死
+
+  两者要**对照看**：
+    离开范围 << 存活时间 → 正常（掉下去被收走，最后在收集点被杀）
+    两者接近             → 傀儡一直没离开刷出区，很可能卡住了
+
+  实现要点：
+    - GolemLifecycleTracker 每 tick 观察（不能按 20 tick 扫描节流，
+      否则漏掉"刷出后 0.5 秒就被冲走"的傀儡）
+    - 在检测范围内就消失的样本**剔除并单独计数**，
+      因为那多半是区块卸载，真实时长未知
+    - 持久化只存"总和 + 次数"，恢复时用平均样本还原，
+      避免往磁盘写几千个数字
+
+【按要求删掉的两个区块】
+  「刷新失败」「按原因统计」已从统计页移除。
+  理由：单台机器的失败原因高度重复，列表很快变成同一句话重复十几行；
+  真要排查某只村民，右键看状态页更直观。
+  腾出的空间给上面两个效率指标。
+
+
+----------------------------------------------------------------
+二十一、@Shadow 没有 refmap 会崩（第二十六轮）
+----------------------------------------------------------------
+
+【坑 87】打开交易界面崩溃：@Shadow 找不到目标字段
+----------------------------------------------------------------
+  用户："打开漏斗崩溃了"，实际是打开村民交易界面。
+
+  崩溃报告（关键三行）：
+    BootstrapMethodError: Mixin transformation of net.minecraft.class_492 failed
+    InvalidMixinException: @Shadow field field_2776 was not located
+        in the target class net.minecraft.class_492. No refMap loaded.
+
+  原因链条：
+    1. 源码里写 @Shadow protected int leftPos;
+    2. 运行时 jar 里该字段叫 field_2776（intermediary 名）
+    3. Mixin 需要 refmap（named → intermediary 对照表）来翻译
+    4. **Loom 1.18 默认不再生成 refmap**，它自己的提示是：
+         "The mixin annotation is no longer enabled by default,
+          you should remove any loom.mixin configuration"
+    5. 没有表 → 在目标类里找 "leftPos" → 找不到 → MixinApplyError → 崩溃
+
+  为什么藏了这么久（这是最值得记的一点）：
+    该 Mixin 是 @Inject 到 init()，**只有第一次打开交易界面时**
+    目标类 class_492 才会被加载并变换。
+    平时不碰村民交易，永远走不到那段代码。
+    → 这类"惰性加载的类"上的 Mixin 问题，
+      单元测试和启动验证都发现不了，只有真的去点那个界面才会暴露。
+
+  修法：不用 @Shadow，改用 AccessWidener 开放字段后强转读取。
+    好处：
+      - 完全不依赖 refmap 这个会静默失效的机制
+      - 打包产物更干净
+      - 编译期就能验证（字段不存在会直接报错）
+
+  【AW 的坑】字段声明在**父类**上
+    我第一次写的是：
+      accessible field .../MerchantScreen leftPos I
+    编译报 "leftPos 在 AbstractContainerScreen 中是 protected 访问控制"。
+    因为 leftPos 等 4 个字段声明在 AbstractContainerScreen，不在 MerchantScreen。
+    AW 必须指向**真正声明该字段的类**；指错了它不会报错，
+    只会当成"这个类没这个字段"而忽略。
+
+  已加 MixinRefmapTest 4 条：
+    - 全工程扫描：任何 mixin 不许出现 @Shadow
+    - mixins.json 不许声明 refmap
+    - AW 必须指向 AbstractContainerScreen（不能是 MerchantScreen）
+    - 4 个布局字段都要开放
+
+【坑 88】"打开漏斗"和"打开交易界面"其实是同一件事
+----------------------------------------------------------------
+  用户说"打开漏斗崩溃"，但崩溃栈里是 class_492（MerchantScreen）。
+
+  推测：玩家可能是用漏斗收村民交易产物，走到村民旁边右键点了村民。
+  这提醒我：**不要只按用户字面描述找代码**，
+  要先去读崩溃报告里的真实类名和调用栈。
+  这次如果不是先看 crash-report，我会去查漏斗相关代码，完全找错方向。
+
+【教训汇总】
+  · 崩溃排查第一步永远是读 crash-report 的 Caused by 链，不是猜
+  · 惰性加载类上的 Mixin，必须真的触发那个界面才能验证
+  · 与其依赖会静默失效的机制（refmap），不如用编译期可验证的方案（AW）
+
+
+----------------------------------------------------------------
+二十二、掉落数据要查战利品表，不是猜（第二十八轮）
+----------------------------------------------------------------
+【坑 89】铁傀儡掉几个铁锭？战利品表里才有答案
+----------------------------------------------------------------
+  要做"铁锭每小时产量估算"，必须先知道单只掉多少。
+
+  我先查 IronGolem 的 die() 字节码 —— 是空的，只调了父类。
+  AbstractGolem 也找不到掉落逻辑。
+  因为 1.14 之后掉落全部走**数据驱动的战利品表**，不在代码里。
+
+  正确位置（官方 jar 内）：
+      data/minecraft/loot_table/entities/iron_golem.json
+
+  内容（实测）：
+      pools[1].entries[0] = minecraft:iron_ingot
+      set_count = uniform(min=3, max=5)
+      → 期望 (3+5)/2 = 4 个
+
+  另一个 pool 掉 0~2 个虞美人，与产量估算无关。
+
+  【教训】1.14+ 的掉落/合成/交易数据基本都在 data/ 下的 JSON 里，
+  去反编译 Java 代码是白费力气。先翻 jar 的 data 目录。
+
+【估算值必须标注"估算"】
+  我特意把这个数在界面上标成「铁锭产量估算」而不是「铁锭产量」。
+  理由写在 tooltip 里：
+    · 掉落是 3~5 的随机数，只有长期平均才收敛到 4
+    · 样本少时（刚开 5 分钟）可能偏离 20% 以上
+    · 傀儡被卡住或掉进虚空，估算会偏高
+
+  给玩家的数字，如果它本质是估算，就要说清楚。
+  否则玩家会拿它当精确值去对比别人的机器。
+
+【坑 90】.lang 的值里写等号，会多出一条假 key
+----------------------------------------------------------------
+  我在中文里写了「20 分钟 = 1 个完整昼夜」。
+  结果 langToJson 报：
+      zh_cn.lang -> zh_cn.json (187 条)
+      en_us.lang -> en_us.json (186 条)
+
+  多出来的那条 key 就是「20 分钟」——
+  某些工具会把行内的每个 = 都当成一次分割。
+
+  我自己的转换脚本只按**第一个** = 切，所以其实没出错，
+  但"文件里出现这种写法"本身就有隐患：
+  换个工具、换个解析器，行为就变了。
+
+  修法：值里不写 =。已加测试：
+      langValuesDoNotContainEqualsSign   —— 值里不许有 =
+      langFilesHaveIdenticalKeyCount     —— 中英键集合必须一致
+
+  【教训】任何"key=value"格式的配置文件，值里都别放分隔符。
+  想要表达"等于"就写"就是"「为」之类的词。
+
+【关于页的滚动】
+  条件速查内容很长（10 段），必须滚动。
+  实现上复用了统计页那套：scissor 裁剪 + 偏移 + 滚动条。
+  两个页面各自一个偏移变量（listScroll / aboutScroll），
+  互不干扰 —— 在统计页滚到中间，切到关于页应该是顶部。
+
+  切标签时主动重置 aboutScroll，
+  否则会出现"切回来停在半截"的困惑。
+
+  文本换行用 font.split，不是按字符数切 ——
+  Minecraft 字体是变宽的，中英混排按字符切会参差不齐。
+
+
+----------------------------------------------------------------
+二十三、长文档不该塞进语言文件（第三十三轮）
+----------------------------------------------------------------
+【坑 91】472 行的文档塞进 lang 会变成灾难
+----------------------------------------------------------------
+  需求："关于页面底部，把《铁傀儡刷新条件-详解》内容全部放进去。"
+
+  第一反应可能是把它拆成 about.conditions.1..N 加进 .lang。
+  我上一版就是这么做的（10 段速查）。但**全文**是 472 行，这么做的问题：
+
+    1. .lang 是 key=value，每行都要变成 "key=内容"，缩进/空行/表格全丢；
+    2. 中英各一份，改一句话要改两处 + 重新生成 JSON；
+    3. 语言文件会膨胀到难以维护，且与根目录那份文档**双份维护**；
+    4. 排版信息（缩进、分隔线）是文档的一部分，塞进 key=value 就没了。
+
+  正确做法：**作为资源文件打包**，运行时读。
+
+      assets/ironfarm/conditions/zh_cn.txt
+      assets/ironfarm/conditions/en_us.txt
+
+  优点：
+    - 纯文本，直接编辑，排版原样保留
+    - 与工程根目录那份是同一个文件复制过来的，可测一致性
+    - 换语言只要换文件名
+
+  【一般规律】"内容"放资源，"标签"放语言文件。
+  lang 是用来翻译短标签的（按钮、标题、提示），不是用来放文档的。
+
+【坑 92】Gradle 9 的隐式依赖会直接拒绝构建
+----------------------------------------------------------------
+  加了资源目录之后，build 突然失败：
+      A problem was found with the configuration of task
+      ':fabric-1.21.1:processResources'
+      Task uses this output of task ':engine:langToJson'
+      without declaring an explicit or implicit dependency
+
+  原因：fabric 模块把 engine 的 resources 目录当 srcDir 用，
+  而那个目录是 :engine:langToJson 的输出。Gradle 9 认为这是隐患
+  （任务顺序不保证），**直接报错而不是警告**。
+
+  修法：
+      tasks.named('processResources') {
+          dependsOn ':engine:langToJson'
+      }
+
+  【教训】Gradle 8 起对"隐式任务依赖"越来越严格，
+  把自己的输出目录当别人的源目录用时，必须显式声明 dependsOn。
+
+【坑 93】文档与代码要能一起测
+----------------------------------------------------------------
+  加了 ConditionsDocTest 7 条，其中一条最关键：
+
+      chineseDocMatchesRootCopy
+      —— 资源里的 zh_cn.txt 必须与根目录《铁傀儡刷新条件-详解.txt》完全一致
+
+  为什么：这两份是同一内容的两个副本。
+  改了根目录忘了同步资源，玩家在游戏里看到的就是旧版本，
+  而这种错误**不会有任何报错**。
+
+  另外几条钉住"完整性"：
+    - 十条章节标题都要在（防止误删）
+    - 两份都要含关键勘误（599、凋灵、参与者不需要恐慌）
+    - 行数 > 300（防止被截断成摘要）
+
+【实现细节】
+  · ConditionsDoc 带缓存，避免每帧读盘
+  · 读不到时返回 null，界面显示一句红字提示，**不崩**
+  · 中文缺失时自动退回英文
+  · 按行配色：分隔线灰、章节黄、警告橙、小标题蓝，纯文本也能看出结构
+  · 空行只占半行，避免文档显得过于松散
+
+
+----------------------------------------------------------------
+二十四、跨加载器与跨版本移植（第三十五轮）
+----------------------------------------------------------------
+【结论先行】1.21.1 跨加载器成本很低；26.3 是架构级重写。
+
+【1.21.1 Fabric → NeoForge：一个下午的工作量】
+  关键前提：两个加载器产出的都是 **Mojang 名**。
+    Fabric   : loom.officialMojangMappings()
+    NeoForge : ModDevGradle 的 NeoForm 反混淆
+  所以适配层源码可以整份复制，只改「加载器 API」那一层。
+
+  实测：20 个类复制过来，25 个编译错误，全是这五类：
+
+    职责        Fabric                          NeoForge
+    ----------  ------------------------------  ------------------------------
+    入口        ClientModInitializer            @Mod 构造器 + FMLClientSetupEvent
+    每 tick     ClientTickEvents.END_CLIENT_TICK ClientTickEvent.Post
+    世界渲染    WorldRenderEvents.AFTER_ENTITIES RenderLevelStageEvent(阶段枚举)
+    按键        KeyBindingHelper                RegisterKeyMappingsEvent
+    右键实体    UseEntityCallback               PlayerInteractEvent.EntityInteract
+    配置路径    FabricLoader.getConfigDir()     FMLPaths.CONFIGDIR
+    实体加载    ServerEntityEvents.ENTITY_LOAD   EntityJoinLevelEvent
+
+  【坑 94】NeoForge 的 RenderLevelStageEvent 不提供 MultiBufferSource
+    Fabric 的 WorldRenderContext.consumers() 直接给现成的缓冲源，
+    NeoForge 只给 PoseStack + Camera，必须自己建：
+        MultiBufferSource.immediate(new ByteBufferBuilder(1536))
+    渲染阶段末尾要 endBatch() 提交，否则什么都不显示。
+
+  【坑 95】AccessTransformer 不能给被泛型覆写的方法提权
+    我想把 Screen.addRenderableWidget 提成 public，AT 直接让构建失败：
+        ERROR Line: 320, ...CreateWorldScreen..<T>addRenderableWidget(T)
+                         .......Screen..<T>addRenderableWidget(T)
+    原因：它被大量子类以泛型方式覆写，AT 提权时签名冲突。
+
+    正解：用 Mixin 的 @Invoker 接口：
+        @Mixin(Screen.class)
+        public interface ScreenInvoker {
+            @Invoker("addRenderableWidget")
+            GuiEventListener ironfarm$addRenderableWidget(GuiEventListener w);
+        }
+    让 MerchantScreenMixin implements ScreenInvoker 即可。
+    这也是 Mixin 官方推荐的"调用 protected 成员"的做法 —— 不改类结构，
+    所以没有 AT 那种冲突。
+
+  【坑 96】jarJar 在 ModDevGradle 2.x 里不需要 enable()
+    我按旧文档写了 jarJar { enable() }，报：
+        Could not find method enable() for arguments []
+    2.x 里 jarJar 任务自动创建，直接 jarJar project(':engine') 就行。
+
+【26.3：不是改包名，是换了一套渲染架构】
+  查证结果（对着 26.3-Fabric.jar 用 javap 核实）：
+
+    1.21.1                         26.3
+    -----------------------------  --------------------------------------
+    GuiGraphics                    **不存在**，改为 GuiGraphicsExtractor
+    PoseStack（3D, Matrix4f）      Matrix3x2fStack（2D GUI 矩阵）
+    Renderable.render(...)         Renderable.extractRenderState(...)
+    Screen.renderBackground(...)   Screen.extractBackground(...)
+    ResourceLocation               Identifier（类名改了）
+    MultiBufferSource              **不存在**
+    client/renderer/RenderType     client/renderer/rendertype/RenderType
+    Villager（npc 包）             npc/villager/Villager（子包）
+    IronGolem（animal 包）         animal/golem/IronGolem（子包）
+
+  也就是说：
+    · 两个 GUI（设置页、状态页）要按新 API 重写
+    · 头顶图标的渲染层要重写（没有 MultiBufferSource）
+    · 采集层要改包名（机械但量大）
+    · 判定引擎（engine 模块）**完全不用改** —— 它不依赖任何 MC 类
+
+  这印证了当初把 engine 拆成纯 Java 模块的决定是对的：
+  跨版本时只有适配层要动，核心逻辑 0 改动。
+
+
+----------------------------------------------------------------
+二十五、26.3 双加载器实战（第三十六轮）
+----------------------------------------------------------------
+【结论】26.3 确实要重写渲染与 GUI，但比预想好做 —— 因为有官方 gizmo API。
+
+【坑 97】26.3 的 GUI 从"立即绘制"改成"描述这一帧"
+----------------------------------------------------------------
+  最反直觉的一条：**覆写 render 能编译通过，但永远不会被调用。**
+
+    Screen#render(GuiGraphics, int, int, float)
+      → Screen#extractRenderState(GuiGraphicsExtractor, int, int, float)
+
+  症状：界面一片空白，日志一声不吭。这是 26.3 移植第一个要查的东西。
+
+  连带的变化：
+    GuiGraphics          → GuiGraphicsExtractor
+    drawString           → text
+    drawCenteredString   → centeredText
+    renderTooltip        → setTooltipForNextFrame
+    renderBackground     → extractBackground
+    PoseStack(Matrix4f)  → Matrix3x2fStack（2D GUI 矩阵）
+
+【坑 98】世界渲染的 Retained 陷阱与官方 gizmo API
+----------------------------------------------------------------
+  1.21.1 那套自绘方案（MultiBufferSource + PoseStack + RenderType 逐个顶点
+  提交 + 自己算 billboard 矩阵）在 26.3 **一行都用不了** ——
+  MultiBufferSource 根本不存在。
+
+  但 26.3 提供了官方的世界调试绘制 API：
+    Gizmos.line(from, to, color, width);
+    Gizmos.cuboid(aabb, GizmoStyle.stroke(color, width));
+    Gizmos.billboardText("x", pos, Style.forColorAndCentered(color))
+           .setAlwaysOnTop();   ← 直接给"穿透方块可见"
+    Gizmos.point(pos, color, size);
+
+  整个渲染层从"几百行矩阵与缓冲管理"缩成"几十次 Gizmos 调用"，
+  而且**天然支持"永远可见"**，不用再自己绕深度测试。
+
+  ⚠ gizmo 是 retained（保留期）而非 immediate：
+    每个 gizmo 带 startTime/expireTime，过期前每帧重复绘制。
+    症状：挂在移动实体上的线出现 2~3 条残影，静止目标完全正常。
+    我们的用法（每帧按实体当前位置重新提交）天然规避了这个问题。
+
+【坑 99】26.3 NeoForge 把 RenderLevelStageEvent 的 Stage 枚举拆了
+----------------------------------------------------------------
+  1.21.1 / 21.1：
+      if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_ENTITIES) return;
+  26.3：
+      getStage() **方法不存在了**，Stage 枚举也没了。
+      改成**按阶段分别建事件子类**：
+        RenderLevelStageEvent.AfterSky
+        RenderLevelStageEvent.AfterOpaqueBlocks
+        RenderLevelStageEvent.AfterOpaqueFeatures
+        RenderLevelStageEvent.AfterTranslucentBlocks
+        RenderLevelStageEvent.AfterTranslucentFeatures
+        RenderLevelStageEvent.AfterTranslucentParticles
+        RenderLevelStageEvent.AfterWeather
+        RenderLevelStageEvent.AfterLevel
+
+  注意：**没有 AFTER_ENTITIES**。选 AfterTranslucentFeatures ——
+  它在实体与半透明几何之后、粒子之前，与旧语义最接近。
+
+  教训：报错说"找不到 getStage()"时，别急着怀疑事件类名错了，
+  可能只是那个类内部结构变了。
+
+【坑 100】26.3 的 AccessWidener 命名空间必须是 official
+----------------------------------------------------------------
+  照抄 1.21.1 的 `accessWidener v2 named` 直接构建失败：
+      Expected official namespace for access widener entry, found: named
+
+  26.x 是非混淆版本，运行时没有 intermediary 映射层。
+  写 official 即可，类名就是 Mojang 名。
+
+【坑 101】26.3 的 VillagerProfession.NONE 变成 ResourceKey
+----------------------------------------------------------------
+  1.21.1：v.getVillagerData().getProfession() == VillagerProfession.NONE
+  26.3 ：getProfession() 返回 Holder<VillagerProfession>，
+         NONE 是 ResourceKey —— 类型不匹配，不能直接比。
+
+  写法：
+      !v.getVillagerData().profession().is(VillagerProfession.NONE)
+
+【坑 102】26.3 没有 Minecraft.screen 字段
+----------------------------------------------------------------
+  所有 mc.setScreen(...) 改成 mc.gui.setScreen(...)。
+  界面读取用 mc.gui.screen()。
+
+  ⚠ 这个改动分散在所有界面切换点，包括 Mixin 里的 lambda，
+  漏一处就是一个"点了没反应"。
+
+【坑 103】processResources 的重复资源必须显式声明策略
+----------------------------------------------------------------
+  engine 的 resources 是各模块的 srcDir，而各模块自己也放了
+  assets/ironfarm/ 资源（内容相同）。Gradle 9 直接报错：
+    "Entry assets/ironfarm/icon.png is a duplicate but no
+     duplicate handling strategy has been set"
+  修法：duplicatesStrategy = DuplicatesStrategy.INCLUDE
+
+【四个构建目标的最终形态】
+  模块                 加载器       MC         Java   产物
+  -------------------  ----------  --------  -----  ------------------------------
+  fabric-1.21.1        Fabric      1.21.1     21    ironfarm-fabric-1.21.1
+  neoforge-1.21.1      NeoForge    1.21.1     21    ironfarm-neoforge-1.21.1
+  fabric-26.3          Fabric      26.3       25    ironfarm-fabric-26.3
+  neoforge-26.3        NeoForge    26.3       25    ironfarm-neoforge-26.3
+
+  engine 模块四个版本**零改动** —— 纯 Java，不依赖任何 MC 类。
+  这是当初拆模块最直接的回报。
+
+【1.21.1 与 26.3 的适配层差异总表】
+  项目          1.21.1                    26.3
+  ----------    ------------------------  --------------------------------
+  混淆         是（需 mappings/remap）    否（无 mappings 行）
+  插件(Fabric)  fabric-loom-remap         fabric-loom
+  依赖(Fabric)  modImplementation         implementation
+  Java          21                        25
+  GUI 绘制      render(GuiGraphics)       extractRenderState(Extractor)
+  GUI 矩阵      PoseStack(Matrix4f)       Matrix3x2fStack
+  世界渲染      MultiBufferSource 自绘    Gizmos API
+  Stage         Stage.AFTER_ENTITIES      拆成独立事件子类
+  资源 ID       ResourceLocation          Identifier
+  界面切换      mc.setScreen              mc.gui.setScreen
+  AW 命名空间   named                     official
+  实体包        npc.Villager              npc.villager.Villager
+                animal.IronGolem          animal.golem.IronGolem
+  按键注册      KeyBindingHelper          KeyMappingHelper
+  按键分类      String                    KeyMapping.Category(record)
+  世界渲染钩子  WorldRenderEvents          LevelRenderEvents.BEFORE_GIZMOS
+
+
+----------------------------------------------------------------
+二十六、三条用户反馈背后的真问题（第三十七轮）
+----------------------------------------------------------------
+【坑 104】gizmo 的线宽单位是"屏幕像素"，不是"格"
+----------------------------------------------------------------
+  用户反馈："刷新范围边框非常细，看上去像虚线。"
+
+  第一版我按 1.21.1 的经验写了 LINE_WIDTH = 0.11f。
+  那版线宽单位是**格**（0.11 格 ≈ 2 像素），所以 0.11 是合理的。
+
+  但 26.3 的 GizmoStyle 源码写着：
+      private static final float DEFAULT_WIDTH = 2.5F;
+      public static GizmoStyle stroke(int argb) { return new GizmoStyle(argb, 2.5F, 0); }
+  而 Gizmos.line 的默认宽度是 3.0F。
+
+  → 这个参数是**屏幕像素宽度**，合理范围 1~4。
+    我填 0.11，等于 0.11 像素 —— 画出来是断续的点，所以"像虚线"。
+
+  教训：**同名参数在不同版本/不同 API 里单位可能完全不同。**
+  移植时不能照抄数值，要查默认值量级。默认值是 2.5 而我填 0.11，
+  差了 20 多倍，这个信号在代码里看一眼就能发现。
+
+【坑 105】透明度 0x30 叠上 alphaMultiplier 之后几乎不可见
+----------------------------------------------------------------
+  用户反馈："铁傀儡检测范围没了。"
+
+  它其实**画了**，只是看不见：
+      GizmoStyle.stroke(0x30B060FF, ...)   ← 0x30 = 19% 不透明
+  而 CuboidGizmo.emit 里所有颜色都会再乘一次 alphaMultiplier：
+      int color = this.style.multipliedStroke(alphaMultiplier);
+
+  19% 再乘一个小于 1 的系数，最后剩下个位数百分比 —— 肉眼等于没有。
+
+  改成 0xA0（63%）后正常可见。
+
+  教训：**调试绘制用的颜色，透明度不要低于 0x80。**
+  想要"不糊屏"应该调线宽或减少元素，不是把 alpha 压到看不见。
+
+【坑 106】头顶标记与状态页用了两套判定（真实逻辑 bug）
+----------------------------------------------------------------
+  用户反馈："村民头顶信息显示似乎与点进去看到的不太同步。"
+
+  查下来是**真的不一致**，不是刷新延迟：
+
+    头顶第一版：conditionIcon()
+                 → 只看个体条件（成年 / 睡过 / 没看见傀儡）
+
+    状态页首行：panicFarmReady() || gossipFarmReady()
+                 → 还包含群体条件、生成点
+
+  后果：村民个体条件都满足但生成点不合法时，
+  头顶亮**绿对勾**，点进去却看到"生成点：没有合法位置"。
+  玩家的结论必然是"这模组显示不准"，然后去查一个根本没问题的地方。
+
+  修法：头顶首字符改用与状态页**同源**的判定，并加一个中间态：
+    ✓ 绿 = panicFarmReady() || gossipFarmReady()     整条链路成立
+    ■ 黄 = hardConditionsMet() 但 ready 不成立        个体OK，群体/生成点还差
+    ? 灰 = hardConditionsUnknown()                    数据不足
+    ✗ 红 = 其余                                       硬条件不满足
+
+  那个**黄色中间态**是关键：没有它，"看起来什么都对但就是不刷"
+  会显示成红叉，玩家同样会被带偏。
+
+  同样的 bug 在 1.21.1 版里也存在（OverlayCuller.checkColor），一并修了。
+  【教训】"改了一处不等于修好了"——同一个逻辑在四个模块里各有一份，
+  修的时候必须四处都改。
+
+【坑 107】测试断言实现细节，会在重构时误报
+----------------------------------------------------------------
+  修完 checkColor 后，OverlayContractTest.cullerChecksUnknownBeforeCheck 失败：
+      "必须先判断 CHECK 再判断 UNKNOWN（否则灰会被误判成红）"
+
+  这个测试靠**indexOf 比较源码文本顺序**来判断逻辑，
+  它断言的是"CHECK 这个字符串比 UNKNOWN 先出现"。
+
+  我改成先判 ready 之后，文本顺序变了，测试就红了 ——
+  但功能反而是修好了。
+
+  教训：**断言要描述约束，不要描述实现顺序。**
+  改成断言两件真正重要的事：
+    1. 必须显式处理 UNKNOWN（不能把"不知道"画成"不满足"）
+    2. 必须与状态页同源（用 ready 系列，不是只看 conditionIcon）
+  这样无论实现怎么重排，只要行为对就能过。
+
+
+----------------------------------------------------------------
+二十七、我把"需求"改坏了，又改回来（第三十八轮）
+----------------------------------------------------------------
+【坑 108】用户说的"就绪"是三个图标各自的就绪，不是"整台机器就绪"
+----------------------------------------------------------------
+  用户澄清（这就是需求本身，必须记住）：
+    对钩 = 成年 + 睡过觉 + 30 秒内没识别到铁傀儡 → 绿
+    骷髅 = 附近有僵尸等威胁正在恐吓            → 绿
+    喇叭 = 闲聊刷铁傀儡的前提满足              → 绿
+
+  上一轮用户说"外面显示的颜色和点进去看的状态不对应，里面显示就绪，
+  外面还可能是红色"。我的判断是：头顶用 conditionIcon()（只看个体条件），
+  状态页首行用 panicFarmReady()（含群体 + 生成点），所以不一致。
+
+  这个判断**本身没错**，但**修的方向错了**：
+  我把头顶改成 panicFarmReady()，让对钩去迁就"总判定"。
+
+  结果对钩在"生成点不合法"时变红，而状态页明明写着
+  "睡过 ✓ / 没有傀儡 ✓" —— 这反而制造了新的不一致。
+
+  正确的改法是反过来的：**图标保持各自的语义**，
+  状态页每一行也按各自的依据上色，谁也别去迁就"总判定"。
+  总判定是总判定，三个图标是三个图标，四件事。
+
+  【教训】用户说"A 和 B 不一致"时，不能默认是 A 错。
+  要先问清楚 A 和 B 各自**应该**表示什么。这次差点把正确的 A 改坏。
+
+【坑 109】骷髅是对称图形，所以它"看起来是对的"
+----------------------------------------------------------------
+  用户说"对钩和喇叭图形不对，骷髅是对的"。
+
+  我查了图集和三格像素，发现三个图形本身都画对了。
+  那为什么只有骷髅"对"？
+
+  因为**骷髅左右对称、上下也近似对称** ——
+  无论 UV 上下翻转还是左右镜像，它看起来都还是骷髅。
+  而对钩和喇叭是不对称的，一翻转就明显变形。
+
+  这是排查渲染问题的好线索：
+  **"只有对称图形正常"通常意味着坐标轴/UV 反了**，
+  而不是图形数据本身错了。
+
+  这一轮查下来发现 UV 其实是对的（上=0、下=1），
+  图形错是别的原因（我上一轮把语义改坏了）。
+  但这条推理值得记住：对称性会掩盖镜像错误。
+
+【坑 110】26.3 的 Gizmos.line 没有虚线参数，必须自己切段
+----------------------------------------------------------------
+  用户反馈："僵尸的威胁射线在视线受阻威胁失效的时候没有变成虚线。"
+
+  1.21.1 版有三种线型：实线（生效）/ 虚线（距离不够）/ 点线（视线被挡）。
+  26.3 的 Gizmos.line 只能画直线段，没有 dash 参数。
+  我第一版只改了颜色深浅 —— 远处根本分不出深浅。
+
+  正确做法：把线段沿世界坐标切成 N 段，每 dash 格画一段、跳过 dash 格。
+  段长用世界坐标（格）算，不随距离变化，近处远处观感一致。
+
+  实现要点：
+    · 单位方向 = (to-from)/total
+    · period = dash * 2
+    · 第 i 段从 i*period 到 i*period+dash
+    · 段数上限 120（每段一个独立 gizmo，太多会拖帧）
+
+  【教训】**颜色不是线型。** 想让用户区分三种状态，
+  要在形状/线型上做区分，而不是只调深浅 ——
+  深浅依赖背景、距离和显示器。
+
+【坑 111】26.3 的 billboardText 一次只能一个颜色
+----------------------------------------------------------------
+  三个图标各自有意义、各自有颜色，但 26.3 的
+  Gizmos.billboardText(text, pos, style) 一次只能给整串文字一个颜色。
+
+  所以改成**分三次发**，三个图标沿玩家朝向的右向量横向排开。
+  色合并成一个（取最严重的）会丢信息：比如"睡过了但没在恐吓"，
+  合并后整行红，玩家会误以为睡眠有问题。
+
+【坑 112】批量替换后花括号容易失衡
+----------------------------------------------------------------
+  这一轮用脚本替换大段方法体，出现了两次花括号失衡
+  （多一个 `}` 少一个 `}`），编译器报的是
+  "需要 class、interface、enum 或 record" 这种**看不到根因**的错误。
+
+  有效的排查手法：逐行累加花括号深度，打印 depth 变化，
+  看哪个位置 depth 掉到 0 或负数 —— 一眼就能定位。
+
+      $depth=0
+      for(...){ $depth += open - close; if($depth -le 0){ 报告这一行 } }
+
+  比一行行看代码快得多。
+
+
+----------------------------------------------------------------
+二十八、26.3 画纹理图标的三条路（第三十九轮）
+----------------------------------------------------------------
+【坑 113】Gizmos 只能画线/框/点/文字，画不了纹理
+----------------------------------------------------------------
+  26.3 的 net.minecraft.gizmos 包下只有：
+    LineGizmo / CuboidGizmo / CircleGizmo / ArrowGizmo /
+    PointGizmo / RectGizmo / TextGizmo
+  没有"纹理四边形"。
+
+  所以我第一版把头顶图标换成了文字符号（✓✗?☠♪）。
+  但用户要的是原来的像素图标（绿勾/红骷髅/红喇叭）——
+  文字符号看起来像"三个叉子和对钩"，不够直观。
+
+  【教训】"这个 API 画不了"不等于"这个版本画不了"。
+  往下找一层，通常有通用的几何提交接口。
+
+【坑 114】26.3 的正确做法是 submitCustomGeometry
+----------------------------------------------------------------
+  SubmitNodeCollector.submitCustomGeometry(PoseStack, RenderType,
+                                           (pose, buffer) -> { ... })
+
+  原版 ExperienceOrbRenderer 就是这么画经验球贴图的，照抄即可：
+
+      private static final RenderType TYPE =
+          RenderTypes.entityTranslucent(IDENTIFIER);
+
+      collector.submitCustomGeometry(poseStack, TYPE, (pose, buffer) -> {
+          buffer.addVertex(pose, x, y, 0.0F)
+                .setColor(r, g, b, a)
+                .setUv(u, v)
+                .setOverlay(OverlayTexture.NO_OVERLAY)   // 必须
+                .setLight(FULL_BRIGHT)                    // 必须
+                .setNormal(pose, 0f, 0f, 1f);             // 必须
+      });
+
+  【坑】这四个 setter 少一个就可能不显示或全黑，
+       而报错信息完全不会提示"你漏了 setNormal"。
+
+【坑 115】Fabric 与 NeoForge 拿 SubmitNodeCollector 的位置不同
+----------------------------------------------------------------
+  这是本轮最费时的一处，两个加载器**不对称**：
+
+    Fabric   LevelRenderContext.submitNodeCollector()
+             —— 挂在同一个渲染事件上，直接取。
+
+    NeoForge RenderLevelStageEvent **没有** submitNodeCollector！
+             它单独提供了一个事件：
+                 SubmitCustomGeometryEvent
+                 带 getSubmitNodeCollector() + getPoseStack()
+
+  也就是说 NeoForge 把"世界几何提交"和"分阶段渲染"拆成了两个事件。
+  我按 Fabric 的思路找了一圈都没找到，最后是列出
+  net/neoforged/neoforge/client/event/ 下所有类才发现的。
+
+  【教训】跨加载器移植时，**"等价 API"不一定在同一个事件对象上**。
+  找不到某个方法时，应该去列对方的事件/类清单，
+  而不是反复怀疑参数名写错。
+
+【坑 116】26.3 的 Camera 和 PoseStack 方法名变了
+----------------------------------------------------------------
+  gameRenderer.getMainCamera()  →  gameRenderer.mainCamera()
+  poseStack.mulPose(Quaternionf) →  poseStack.rotate(Quaternionfc)
+
+  【教训】1.21.1 的写法在 26.3 上不一定存在，
+  编译报"找不到符号"时先查 javap，别凭记忆改。
+
+【26.3 头顶图标的最终形态（两个加载器）】
+  Fabric    LevelRenderEvents.BEFORE_GIZMOS → ctx.submitNodeCollector()
+  NeoForge  SubmitCustomGeometryEvent       → event.getSubmitNodeCollector()
+  两者都调同一个 IconAtlasRenderer.drawIconRow(...)
+  —— 业务逻辑一份，只有"从哪拿 collector"不同。
+
+
+----------------------------------------------------------------
+二十九、"日志戛然而止"怎么判断是不是自己的锅（第四十轮）
+----------------------------------------------------------------
+【现象】用户报"崩溃了"，附 latest.log。
+
+  日志只有 67 行，最后一行是：
+      [04:37:33] [Render thread/INFO]: Backend library: LWJGL version 3.4.3+4
+  之后什么都没有 —— 没有 java.lang.Exception，没有 crash-report。
+
+【关键判据一：和成功日志比"同一位置之后还有什么"】
+  成功那次的同一位置之后紧接着是：
+      Using graphics backend OpenGL, using drivers: ...
+      Using graphics device: NVIDIA GeForce RTX 2080 Ti
+      Created window using SDL video driver: windows
+  崩溃那次在 `Backend library` 之后就没了。
+
+  → 说明崩在**创建图形上下文/窗口**这一步，属于原生层（驱动/GL/SDL），
+    而不是 Java 代码抛异常。Java 异常一定会被打进日志。
+
+【关键判据二：统计历史日志的结尾模式】
+  把 logs/ 下所有 .log.gz 的最后一行拉出来看：
+      2026-10-26-5 .. 2026-10-27-6   全部是 "Clearing ModLoader"
+      只有这一次是 "Backend library"
+  → 8 次正常 + 1 次异常，且异常点不在正常流程的任何位置。
+
+【关键判据三：确认自己的代码那时还没执行】
+  成功日志里 ironfarm 的第一条输出是：
+      [modloading-sync-worker/INFO]: [ironfarm] settings loaded from ...
+  它出现在 `Backend library` **之后**。
+  也就是说崩溃发生时，我的代码一行都还没跑。
+  → 不可能是我的 mod 逻辑引起。
+
+【关键判据四：静态初始化也要查（不能只看出现在哪）】
+  即使代码没"执行到"，类加载时的 <clinit> 也可能早就跑过。
+  用 javap 把 <clinit> 反编译出来看：
+      static {}:
+        ldc "ironfarm"; ldc "textures/icon_atlas.png"
+        invokestatic Identifier.fromNamespaceAndPath
+        putstatic ATLAS
+        return
+  只造了一个 Identifier，不碰 GL、不开文件、不读配置 —— 安全。
+  （RenderTypes.entityTranslucent 是放在 type() 里延迟创建的，
+    第一次渲染才调用，不在 <clinit> 里。）
+
+【结论】偶发崩溃，与本模组无关。用户再启动一次就正常了。
+
+【教训】**"我的代码没被执行到"这句话必须验证，不能推测。**
+  两个具体动作：
+    1. 在成功日志里找到自己第一条输出，看它相对崩溃点的位置；
+    2. 用 javap 查 <clinit>，确认静态初始化没有副作用。
+
+  只看"崩溃日志里没有我的 mod 字样"是不够的 ——
+  类加载也会执行代码，而类加载失败/副作用往往不留正常日志。
+
+【顺带：.abnormal 标记】
+  崩溃后 workdir 里出现 0 字节的 .abnormal 文件，
+  那是启动器记录"上次非正常退出"用的，不是崩溃原因本身。
+  看到它不要当成线索，当成"确认崩溃过"的旁证即可。
+
+
+----------------------------------------------------------------
+三十、实物统计：漏斗销毁判定（第四十二轮）
+----------------------------------------------------------------
+【需求】漏斗指向白色羊毛块时，销毁漏斗内全部物品并统计，
+        按种类记录总数量与每小时产量。
+
+【坑 117】"漏斗指向"要按输出方向算，不是任意相邻方块
+----------------------------------------------------------------
+  漏斗的 BlockState 有 FACING 属性，它表示**输出方向**：
+    FACING=DOWN   → 物品往下方送
+    FACING=NORTH  → 往北送
+  所以"指向白色羊毛"= 看 facing 所指的那一格，不是"周围六格里有白色羊毛"。
+
+  这两者差别很大：一个朝下的漏斗，如果在它**上方**放白色羊毛，
+  按"输出方向"判定是**不该**触发的（它往上不输出）。
+  按"任意相邻"判定会误触发。
+
+【坑 118】多版本 API 一致，但访问权不一致
+----------------------------------------------------------------
+  漏斗/羊毛这套 API（HopperBlock.FACING、HopperBlockEntity、
+  BuiltInRegistries.BLOCK/ITEM、Container.clearContent）在
+  1.21.1 与 26.3、Fabric 与 NeoForge **四个组合里写法完全一样**，
+  只有 ResourceLocation → Identifier 一个改名。
+
+  但**编译时的访问权不同**：
+    · Gradle 流程：AccessTransformer 已经把 lastGossipTime 等开放成 public
+    · 手工 javac：必须自己喂"已应用 AT 的 jar"，
+      否则报 "lastGossipTime 在 Villager 中是 private 访问控制"
+
+  这解释了为什么同一个源文件在 Gradle 里编得过、手工 javac 编不过 ——
+  不是代码问题，是 classpath 里放的 jar 不同。
+
+【坑 119】clean 会删掉 NeoForm 的中间产物，而重建需要联网
+----------------------------------------------------------------
+  我跑了一次 `gradle clean`，把 neoforge-26.3/build/moddev/artifacts
+  里已反混淆的 Minecraft jar 删掉了。之后 build 直接失败：
+
+      Node action for downloadManifest failed
+
+  原因是 NeoFormRuntime 每次构建都要联网校验版本 manifest，
+  而当时本地代理 127.0.0.1:10808 没开、直连 maven.neoforged.net 也超时。
+
+  【教训】**对 NeoForge 模块不要随便 clean。**
+  它的 build/moddev/artifacts 里是"反混淆后的 Minecraft + NeoForge 补丁"，
+  重建代价是几 GB 下载。宁可只 clean 自己的 classes 目录。
+
+  应急手法（这一轮用的）：绕开 Gradle 手工编译 + 组装 jar
+    1. 从 nfrt 缓存找 recompile_*.jar（已应用 AT、含 MC 类）
+       $env:USERPROFILE\.gradle\caches\neoformruntime\intermediate_results
+    2. classpath = recompile jar + neoforge universal jar
+                  + D:\26.3F\.minecraft\libraries 下全部 jar
+                  + engine jar
+    3. javac --release 25 -d out @sources.txt
+    4. 拿上一次的 jar 当模板，删旧 class、加新 class、
+       替换 META-INF/jarjar/ironfarm.ironfarm-engine.jar、
+       替换 lang/*.json
+
+  验证时要确认三件事（我这一轮漏了第三件，返工一次）：
+    ① 新 class 在不在
+    ② engine 嵌套 jar 是不是新的（含新加的类）
+    ③ 语言 JSON 是不是新的（含新加的键）
+
+【坑 120】统计页新增区块要用 Section 概念，但当前是平铺 Row 列表
+----------------------------------------------------------------
+  UiModel 里已经有 Section 结构（标题 + rows），但统计页实际是
+  直接遍历 List<Row> 平铺画的。所以"实物统计"这块我用的是：
+    · 一行 fill() 画分隔线
+    · 一行标题（黄色）
+    · 然后遍历 itemStats() 的 Row
+  保持与上面数据在视觉上分开 —— 这正是用户要求的"分隔开"。
+
+  【教训】先看现有渲染循环的形态再决定用哪种数据结构，
+  不要因为"有 Section 类"就假设统计页也在用它。
+
+
+----------------------------------------------------------------
+三十一、"每 tick 扫全图"必然被加速器打爆（第四十三轮）
+----------------------------------------------------------------
+【现象】用户："26.3 NeoForge 开游戏加速就崩溃。怀疑每刻清理漏斗带来的问题。"
+
+【查证】翻遍 logs/ 下的 4 个日志（含 latest.log），
+        **没有任何 ironfarm 异常栈**。
+        每个日志的异常都来自 swiftmap 的关闭流程（ClosedChannelException）。
+        所以不是"抛异常崩"，而是**性能压垮**。
+
+【坑 121】每 tick 扫 121 个区块 + getChunk 会同步加载区块
+----------------------------------------------------------------
+  第一版的 tick 实现：
+      for (cx = -5..5) for (cz = -5..5)      // 121 个区块
+          scanChunk(level.getChunk(cx, cz)); // ← 这个会同步加载
+
+  两个致命点：
+    ① 121 个区块 × 每 tick = 每秒 2420 次区块遍历
+    ② level.getChunk(cx,cz) 是**同步加载**语义：
+       玩家跑到哪儿，就顺手把周围没用到的区块全加载出来，越跑越卡
+
+  开"游戏加速"（tick 频率 ×N）后，这两个开销一起 ×N。
+  不是崩溃，是卡到游戏被强杀 —— 表现就是"开加速就崩"。
+
+【修法一：不加载区块】
+      level.getChunkSource().getChunkNow(cx, cz)   // 没有就返回 null
+  只处理**已经加载**的区块。玩家没去过的地方不该被我们加载。
+
+【修法二：按吞吐量节流，而不是按时间节流】
+  用户要求"漏斗每吸取 2 次物品清理一次"。
+  我一开始想"那不就是把每 tick 改成每 2 tick"——这是**理解错了**：
+
+    每 2 tick 清一次  = 时间节流，漏斗闲着也照样扫
+    每吸 2 次清一次    = 吞吐量节流，漏斗不动就完全不做事
+
+  后者的开销与**实际工作量**挂钩，这才是对的。
+  实现：每个漏斗记一个已吸次数（Long2IntOpenHashMap，键用 BlockPos.asLong()），
+  吸满阈值才清空并归零。
+
+【修法三：扫描本身再叠一层节流】
+  即使清空按次数节流了，**扫描**如果还是每 tick 做，加速时照样爆。
+  所以再叠 5 tick 一次扫描（0.25 秒）。
+  合理性：漏斗每 tick 最多吸 1 次，5 tick 最多 5 次 > 阈值 2，
+  不会漏掉任何一次清理。
+
+【坑 122】fastutil 的 addTo 返回值语义不要靠猜
+----------------------------------------------------------------
+  想用 pickCounts.addTo(key, 1) 一行搞定"自增并取新值"，
+  但 javap 只看到签名 `public int addTo(long, int)`，
+  看不出返回的是旧值还是新值。
+
+  不同 fastutil 版本/不同方法（addTo vs getAndAdd）语义不一致，
+  猜错就是差一错误。改成显式读改写：
+
+      int picks = map.get(key) + 1;
+      if (picks < THRESHOLD) { map.put(key, picks); return; }
+      map.remove(key);
+
+  【教训】**不要靠记忆猜第三方库的返回值语义。**
+  要么查文档，要么写成不依赖该语义的形式。
+
+【坑 123】手工组装的 jar 会继承模板的版本号
+----------------------------------------------------------------
+  上一轮为了绕开 NeoForm 的联网校验，拿旧 jar 当模板手工替换 class。
+  结果 mods.toml 里的 `version = "0.35.0"` 原样留下来了 ——
+  游戏里 Mod List 显示 0.35.0，文件名却是 0.36.0。
+
+  这种"版本号对不上"的错很难在代码里发现，因为一切都能跑。
+  只有看游戏内 Mod List 或日志里的 Mod 清单才会露馅。
+
+  【检查清单】手工组装后必须核对：
+    ① class 是否是新的
+    ② engine 嵌套 jar 是否是新的
+    ③ lang/*.json 是否是新的
+    ④ **mods.toml / fabric.mod.json 里的 version 是否改过**  ← 这轮漏的
+
+【坑 124】打包脚本按"第一个 jar"取，旧 jar 残留会取错
+----------------------------------------------------------------
+  改了 mod_version 后重新 build，build/libs 里同时存在
+  0.36.0 和 0.37.0 两个 jar（Gradle 不会自动删旧的）。
+  pack.ps1 里是 `Select-Object -First 1`，取到了 0.36.0，
+  于是部署回旧版本 —— 而且日志上看起来"打包成功"。
+
+  【教训】打包脚本取 jar 时应该**按版本号过滤**，
+  或者先用 clean 清掉旧产物。这一轮我改成部署前先按 `0.37.0` 匹配。
+
+
+----------------------------------------------------------------
+三十二、清理周期要对齐漏斗速度，不是凭感觉（第四十四轮）
+----------------------------------------------------------------
+【两轮真实故障，同一个功能的两个极端】
+  0.36.0 每 tick 清一次   → 开游戏加速卡死（扫区块太频繁）
+  0.37.0 吸 2 次清一次   → 不卡了，但**物品来不及清理，有残留**
+
+  第二个是我自己造成的：用户说"每吸 2 次清一次"，我照着实现了，
+  但没核算过 2 次到底是多长时间。
+
+【关键数字：MOVE_ITEM_SPEED = 8】
+  原版 HopperBlockEntity：
+      public static final int MOVE_ITEM_SPEED = 8;
+      ...
+      setCooldown(MOVE_ITEM_SPEED);
+  含义：漏斗**每 8 tick 吸 1 个物品**。
+
+  字节码里也是 `bipush 8`（两处：比较 cooldown 与赋值），
+  源码 jar 里确认是 `= 8`。两处交叉验证。
+
+  → "吸 2 次" = 16 tick。在这 16 tick 里漏斗又吸了 2 个，
+    加上上一轮没清干净的，仓库里始终压着东西。这就是"残留"。
+
+【正确做法：清理周期 ≤ 吸入间隔】
+  周期 = 8 tick（与吸入间隔相同）时：
+    第 8 tick：吸 1 个 → 同 tick 检查并清空 → 0 个
+    第 16 tick：吸 1 个 → 清空 → 0 个
+  残留恒定为"本轮吸进来的那 1 个"，峰值 2 个（吸与清同 tick 时的顺序差异）。
+
+  周期 < 8：积压不会更少（已经是 1 个了），只是白扫几倍 → 0.36.0 的卡死。
+  周期 > 8：每个周期内吸进多个，开始堆积 → 0.37.0 的残留。
+
+  → **8 是唯一同时满足"不卡"和"不堆积"的值。**
+
+【坑 125】两层节流的架构（这是不卡的关键）
+  只把"清理"改成低频是不够的 —— 如果**扫描**还是每 tick 做，
+  加速时照样爆。必须拆成两层：
+
+    第一层 重建目标列表：每 40 tick 一次，扫 9 个区块（半径 24 格），
+                        只处理 getChunkNow 返回的已加载区块
+    第二层 清理已登记的漏斗：每 8 tick 一次，
+                        只看第一层登记下来的那几个（通常 1~5 个），
+                        **不扫区块**，查哈希表 + 遍历容器
+
+  稳态开销 = 每 8 tick 几次哈希查找，与地图大小无关。
+  加速器提高 N 倍频率时，开销线性 ×N，而不是
+  "区块数 × 扫描次数"的乘积爆炸（那才是 0.36.0 卡死的原因）。
+
+  顺带把扫描半径从 64 格缩到 24 格：121 个区块 → 9 个区块，开销 1/13。
+  漏斗销毁本来就是局部功能，隔 40 格外的漏斗没人看得到。
+
+【坑 126】getBlockEntity(BlockPos) 可能**创建**方块实体
+  LevelChunk 有两个重载：
+      getBlockEntity(BlockPos)                              // 可能创建！
+      getBlockEntity(BlockPos, EntityCreationType.CHECK)    // 只查不建
+  在每 8 tick 的循环里用前者，等于给每个查过的位置
+  可能性地造一个方块实体出来。必须用 CHECK。
+
+【教训】**用户给的参数要换算成物理量再验证。**
+  用户说"每吸 2 次清一次"，这是**次数**；
+  但真正决定会不会积压的是**时间间隔**。
+  不换算就发现不了"2 次 = 16 tick > 8 tick 吸入间隔"这个矛盾。
+  换算之后，答案自己就出来了：周期应该等于吸入间隔。
+
+
+----------------------------------------------------------------
+三十三、三个反馈，一个致命 bug（第四十五轮）
+----------------------------------------------------------------
+【用户反馈】1. 清理速度还是跟不上  2. 统计数据完全没有  3. 加开关
+
+【坑 127】统计永远为 0：缓存了会被替换掉的对象引用（致命）
+----------------------------------------------------------------
+  这是本工程最隐蔽的一个 bug，值得反复看。
+
+  IronFarmClientState 里：
+      private StatsRecorder stats = new StatsRecorder();   // 先建一个
+      ...
+      public void loadStats() {
+          this.stats = StatsIO.load();                     // ← 整个替换掉！
+      }
+
+  而我的 HopperDestructor：
+      public HopperDestructor(StatsRecorder stats) {
+          this.stats = stats;      // ← 构造时缓存了旧引用
+      }
+
+  时序：
+      1. 构造 StatsRecorder A
+      2. 某个时刻构造 HopperDestructor，抓住 A
+      3. loadStats() 把字段换成 B
+      4. HopperDestructor 继续往 A 里记账
+      5. 界面读的是 B → 永远是 0
+
+  修法：传 **Supplier** 而不是引用，每次现取：
+      new HopperDestructor(this::stats)
+
+  【一般规律】凡是"长生命周期对象持有另一个可能被替换的对象"，
+  都应该持有 supplier / 每次现取，而不是缓存引用。
+  这类 bug 的可怕之处是**没有任何报错** —— 数据静静地写进垃圾对象。
+
+  【怎么发现的】日志里完全没有 HOPPER 相关输出，说明清理压根没跑；
+  但代码里调用点、开关、API 都正常。于是顺着 stats 的生命周期查，
+  看到 loadStats() 里那行 `this.stats = ...` 才恍然大悟。
+
+【坑 128】周期 = 吸入间隔 还不够，因为有相位问题
+----------------------------------------------------------------
+  0.38.0 把清理周期设成 8（= MOVE_ITEM_SPEED），推理是
+  "周期不超过吸入间隔就不会积压"。这个推理**漏了相位**：
+
+      我们的清理跑在漏斗更新之前
+      tick 8  清理（还空）→ 紧接着漏斗吸 1 个 → 残留 1
+      tick 16 清理（清掉）→ 紧接着漏斗吸 1 个 → 残留 1
+      任何时刻看，漏斗里总有 1 个刚吸进来的
+
+  这就是用户说的"清理速度还是跟不上" —— 不是真跟不上，
+  是**永远有一个刚进来的**，看起来像没清。
+
+  修法：周期必须**严格小于**吸入间隔，让每个吸入周期内清 ≥2 次，
+  总有一次落在"吸入之后"。取 8/4 = 2 tick。
+
+  【教训】"周期 ≤ 间隔"是不够的，要"周期 < 间隔"。
+  差一个等号，现象完全不同。
+
+【坑 129】破坏性功能默认关闭 + 单独一行开关
+----------------------------------------------------------------
+  白色羊毛漏斗销毁会**真的删掉玩家物品**。
+  这类功能不该默认开，也不该和其他显示开关挤在同一行。
+
+  处理：
+    · ModSettings.woolHopperEnabled 默认 false
+    · 设置页单独占一整行（halfW*2+6 宽），视觉上显眼
+    · tickHopperDestruction 第一行就是开关判断，关掉直接 return
+    · SettingsCodec 里加上读写，保证重启后保留
+
+  【教训】加功能时要先问自己"这个操作可逆吗"。
+  不可逆的（销毁物品、改世界）默认关，且要在 UI 上显眼。
+
+
+----------------------------------------------------------------
+三十四、三处数据不一致，两个定时数各写一份（第四十九轮）
+----------------------------------------------------------------
+【用户反馈】
+  1. "开始记录"改成"已记录 X 小时 Y 分"，游戏加速要跟着加速
+  2. 物品统计里的名称显示 iron_ingot，应该是"铁锭"
+  3. 上下两块统计的铁锭数据严重对不上
+
+【坑 130】两处各写一份 tick/小时 换算，差 72 倍（用户第 3 条反馈）
+----------------------------------------------------------------
+  截图数据反推：
+    上面：铁傀儡 33 只 / 206.2 只每小时 → 时长 0.16 小时
+    下面：销毁 154 个 / 51.1 个每小时  → 时长 3.01 小时
+
+  同一台机器、同一段时间，两个"时长"差 18.8 倍。
+
+  代码里：
+    StatsRecorder:   elapsed / 72000.0   // 72000 tick = 1 小时 ✓
+    ItemDestroyStats: (now - start) / 1000.0  // ← 1000！！
+
+  72 倍 = 72000 / 1000，正好对上。
+
+  【更糟的是】旧测试 ItemDestroyStatsTest 里明确写着
+  "时间口径：1000 tick = 1 小时（与铁傀儡统计一致）"，
+  并且断言 assertEquals(50.0, s.itemsPerHour(2000), ...)
+  —— 测试是**绿的**，功能是**错的**。
+
+  【教训】测试断言了错误规格，比没有测试更危险，
+  因为它给了"已验证"的错觉。
+
+  修法：常量只定义一处，两边都引用：
+      public static final double TICKS_PER_HOUR = 72000.0;
+      // StatsRecorder 也改成用 ItemDestroyStats.TICKS_PER_HOUR
+
+  【一般规律】**同一个换算系数绝不要在两个地方各写一份字面量。**
+  迟早会分叉，而且分叉后到处都能跑，只是数字悄悄错了。
+
+【坑 131】两块统计各自设 startGameTime，分母不同
+----------------------------------------------------------------
+  修完 72 倍之后还有第二层问题：
+    StatsRecorder.startGameTime    ← 由"点开始记录"设定
+    ItemDestroyStats.startGameTime ← 由"第一次销毁物品"设定
+
+  两个起点不同，"每小时"的分母就不同。用户看到的"对不上"
+  其实是这两个 bug 叠加。
+
+  修法：ItemDestroyStats 加 syncStart(gameTime)，
+  StatsRecorder.start() 里调用它，强制对齐。
+
+【坑 132】引擎拿不到 MC 的本地化物品名（用户第 2 条反馈）
+----------------------------------------------------------------
+  界面显示 iron_ingot 而不是"铁锭"。
+
+  根因：engine 是纯 Java、零 MC 依赖，只有
+      lang.get("ironfarm.item.<path>")
+  而语言文件里没有 ironfarm.item.iron_ingot 这种键 ——
+  原版有几千个物品，不可能全列一遍。
+
+  修法：引擎开一个注入点，由适配层提供解析器：
+      // engine
+      public void setItemNameResolver(Function<String,String> resolver)
+      // 适配层
+      uiModel.setItemNameResolver(id -> {
+          var rl = ResourceLocation.tryParse(id);
+          var item = BuiltInRegistries.ITEM.get(rl);
+          return new ItemStack(item).getHoverName().getString();
+      });
+
+  【关键细节】26.3 的 API 变了两次：
+    · ResourceLocation → Identifier
+    · BuiltInRegistries.ITEM.get(rl) 返回 Optional<Reference<Item>>
+      → 要用 DefaultedRegistry.getValue(rl) 才直接拿到 Item
+
+  这两个都是编译期能发现的，不算难；难的是**四个模块都要改**。
+
+【坑 133】按行索引改代码极易改坏
+----------------------------------------------------------------
+  这一轮我用 [System.IO.File]::ReadAllLines 做行级插入/删除，
+  连续三次改坏文件：
+    · 删多了 → 文件只剩 2 行
+    · 删少了 → 残留半截语句
+    · 插入位置差一行 → 语法错误
+
+  【教训】行索引编辑只适合"插入整块"，
+  删除/替换要用**唯一文本锚点** + Replace，并且改完立刻编译。
+  我这次靠重新整个文件才救回来。
