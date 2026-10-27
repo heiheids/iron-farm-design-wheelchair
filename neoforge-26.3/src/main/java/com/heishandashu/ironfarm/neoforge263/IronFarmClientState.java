@@ -103,7 +103,20 @@ public final class IronFarmClientState {
     private IronFarmClientState() {
         // 注入物品名解析器：引擎不含 Minecraft，拿不到本地化物品名，
         // 必须由适配层提供（否则界面显示 iron_ingot 这种原始 ID）。
-        this.uiModel.setItemNameResolver(id -> {
+        applyItemNameResolver(this.uiModel);
+    }
+
+    /**
+     * 给 UiModel 注入物品名解析器。
+     *
+     * <p><b>⚠ 每次新建 UiModel 后都必须调用。</b>
+     * applySettings() 切换语言时会重建 uiModel（L201），
+     * 那里如果忘了注入，物品名就会退回 iron_ingot 这种原始 ID，
+     * 而且**完全没有日志**（resolver 压根不被调用）——
+     * 这正是 0.44.0 还显示 iron_ingot 的原因。</p>
+     */
+    private static void applyItemNameResolver(UiModel ui) {
+        ui.setItemNameResolver(id -> {
             try {
                 var rl = net.minecraft.resources.Identifier.tryParse(id);
                 if (rl == null) {
@@ -113,11 +126,12 @@ public final class IronFarmClientState {
                 if (item == null) {
                     return null;
                 }
-                String name = new net.minecraft.world.item.ItemStack(item).getHoverName().getString();
+                String name = new net.minecraft.world.item.ItemStack(item)
+                        .getHoverName().getString();
                 if (DIAG_SHOWN < 5) {
                     DIAG_SHOWN++;
                     org.slf4j.LoggerFactory.getLogger("ironfarm").info(
-                            "[ironfarm] ITEMNAME id=" + id + " item=" + item + " name=" + name);
+                            "[ironfarm] ITEMNAME id=" + id + " name=" + name);
                 }
                 return name;
             } catch (RuntimeException e) {
@@ -199,6 +213,8 @@ public final class IronFarmClientState {
             lang = Lang.load(want);
             loadedLocale = want;
             uiModel = new UiModel(lang);
+            // ⚠ 重建后必须重新注入，否则物品名退回原始 ID（0.44.0 的 bug）
+            applyItemNameResolver(uiModel);
         }
         mobRegistry.strictMode = settings.scaryMobStrictMode;
         engine = new ConditionEngine(profile);

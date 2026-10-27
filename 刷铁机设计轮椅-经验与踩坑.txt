@@ -2697,3 +2697,65 @@
   这次的救命恩人是刚建立的 git 备份：
       git checkout HEAD -- <被改坏的文件>
   一条命令恢复到完好状态。**备份机制第一次实战就救场了。**
+
+
+----------------------------------------------------------------
+三十六、注入丢失：对象被重建时忘了重新注入（第五十二轮）
+----------------------------------------------------------------
+【现象】日志里连 ITEMNAME 都没有，但漏斗功能完全正常
+        （HOPPER scan: chunks=25, hoppers=1, pointingAtWhiteWool=1）。
+
+【坑 137】applySettings() 重建 UiModel，把注入的 resolver 丢了
+  时序：
+    1. 构造 IronFarmClientState
+    2. 构造里调 uiModel.setItemNameResolver(...)  ← 注入成功
+    3. loadSettings() → applySettings()
+    4. applySettings 里：uiModel = new UiModel(lang)  ← 全新实例！
+    5. 注入没了，resolver 为 null
+    6. itemName() 走兜底分支，返回 iron_ingot
+
+  【关键判断】"日志里一条 ITEMNAME 都没有" 说明 resolver **压根没被调用**，
+  而不是"调用了但返回错的值"。
+  这两种情况的排查方向完全不同：
+    · 没被调用     → 注入丢失 / 对象不是同一个
+    · 调用了返回错 → registry / 本地化问题
+
+  这个区分让我少走了一大圈弯路。
+
+【修法】把注入抽成方法，每个创建点都调用：
+    private static void applyItemNameResolver(UiModel ui) { ... }
+
+    // 字段初始化
+    private UiModel uiModel = createUiModel(lang);
+    // 重建点
+    uiModel = new UiModel(lang);
+    applyItemNameResolver(uiModel);   ← 别忘
+
+  【一般规律】当一个对象有**多个创建点**时，
+  任何"创建后必须做的初始化"都必须抽成工厂方法或统一方法。
+  分散写必然漏 —— 我这次就是只在一个点写了。
+
+【坑 138】"编译通过 + jar 里有这个调用" 不等于运行时生效
+  我上一轮验证过 jar 里有 setItemNameResolver 的字节码，就以为修好了。
+  但那只证明"构造函数里有注入"，
+  **不能证明 applySettings 之后还有**。
+
+  【教训】验证要针对**实际执行路径**：
+  如果代码有运行时重建，就要验证重建之后的状态，
+  而不是只验证初始构造。
+
+【坑 139】行索引编辑第三次改坏文件
+  给构造函数插工厂方法时，多插了一个 `}`，
+  导致 "需要 class, interface, enum 或 record" 且括号不平衡（78 vs 79）。
+
+  这轮用的是：先 git checkout HEAD -- <文件> 恢复，
+  再做**最小改动**（只改一行 + 插一个方法），
+  每次改完立刻检查括号平衡。
+
+  【可靠的检查】**改完立刻数括号**：
+      $open=0;$close=0
+      Get-Content $f | % { $open += ([regex]::Matches($_,'\{')).Count
+                          $close += ([regex]::Matches($_,'\}')).Count }
+      "差: $($open-$close)"   # 必须是 0
+
+  这个检查几次救了我，比编译报错更早发现问题。
