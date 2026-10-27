@@ -126,7 +126,7 @@ public final class IronFarmClientState {
                 if (rl == null) {
                     return null;
                 }
-                var item = net.minecraft.core.registries.BuiltInRegistries.ITEM.get(rl).orElse(null);
+                var item = net.minecraft.core.registries.BuiltInRegistries.ITEM.getValue(rl);
                 if (item == null) {
                     return null;
                 }
@@ -188,6 +188,7 @@ public final class IronFarmClientState {
         if (stack == null || stack.isEmpty()) {
             return null;
         }
+        // MC 的语言文件是 JSON，用 Language.loadFromJson 解析成扁平的 key→value。
         Map<String, String> raw = new java.util.HashMap<String, String>();
         for (var res : stack) {
             try (var in = res.open()) {
@@ -197,6 +198,7 @@ public final class IronFarmClientState {
         if (raw.isEmpty()) {
             return null;
         }
+        // 再把"物品注册名"映射成名字：遍历所有物品取 descriptionId 查表。
         Map<String, String> out = new java.util.HashMap<String, String>();
         for (var item : net.minecraft.core.registries.BuiltInRegistries.ITEM) {
             String descId = item.getDescriptionId();
