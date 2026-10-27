@@ -2861,3 +2861,73 @@
   其它代码一行不动。
 
   备份机制第三次救场。
+
+
+----------------------------------------------------------------
+三十九、同一个 bug 修了一半（第六十三轮）
+----------------------------------------------------------------
+【现象】NeoForge 版本物品名已是中文，Fabric 版还是 iron_ingot。
+       用户让我"看看 NeoForge 怎么修的"。
+
+【坑 145】只对比了方法体，没对比**调用点**
+  我对比了三个方法（applyItemNameResolver / itemNameTable / loadItemNames），
+  逐一改到完全一致，结果 Fabric 还是不生效。
+
+  真正的原因在**调用点**：
+
+      // NeoForge（修过）
+      uiModel = new UiModel(lang);
+      applyItemNameResolver(uiModel);   // ← 这行
+
+      // Fabric（漏了）
+      uiModel = new UiModel(lang);
+                                        // ← 什么都没有
+
+  这个 bug 我在 0.45.0 修 NeoForge 时已经遇到并修好，
+  但当时只改了 NeoForge，没同步 Fabric。
+
+  【教训】同步修复时，**"方法一致"不等于"行为一致"**。
+  必须同时检查：
+    ① 方法实现是否一致
+    ② **所有调用点是否都调了**
+
+  更可靠的判断：看日志有没有该方法的输出。
+  Fabric 日志里 ITEMNAME 一条都没有 → 说明方法压根没被调用，
+  而我却一直在改方法体内部。
+
+【坑 146】loadedLocale = null 让"构造函数里注入"必然失效
+  这是坑 139 的完整版解释：
+
+      private String loadedLocale = null;      // 初值 null
+      loadSettings() → applySettings()
+      if (!want.equals(loadedLocale)) {        // null 比较 → 恒 true
+          uiModel = new UiModel(lang);         // 必然重建
+      }
+
+  所以启动时 100% 会重建 uiModel，
+  构造函数里注入的 resolver 100% 会被丢掉。
+
+  【一般规律】如果某个初始化"必定会在启动后立刻被覆盖"，
+  那这段初始化就是**死代码** —— 它给人"已经处理了"的错觉。
+  这次的症状就是：代码看起来注入了，运行时却从没生效。
+
+【坑 147】1.21.1 的 Registry 不能用 for-each
+  我从 26.3 抄过来的代码里有：
+      for (var item : BuiltInRegistries.ITEM) { ... }
+
+  在 26.3 上没问题，1.21.1 上打包检查报：
+      member net/minecraft/class_7922.iterator()Ljava/util/Iterator; 缺失
+
+  因为 1.21.1 的 Registry（class_7922）remap 后没有 iterator()。
+
+  改成 entrySet() 遍历，一次拿到 key 和值，反而更直接：
+      for (var entry : BuiltInRegistries.ITEM.entrySet()) {
+          String name = raw.get(entry.getValue().getDescriptionId());
+          out.put(entry.getKey().location().toString(), name);
+      }
+
+  【这个检查很有价值】tools/verify-refs.ps1 在打包前拦住了它。
+  没有这个检查，jar 能打出来、能加载，但一进游戏就 NoSuchMethodError。
+
+  【教训】跨版本抄代码后必须跑打包检查，
+  两个版本的 API 表面相同，底层映射可能不一样。
