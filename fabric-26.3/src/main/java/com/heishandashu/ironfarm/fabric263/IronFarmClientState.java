@@ -1,5 +1,6 @@
 package com.heishandashu.ironfarm.fabric263;
 
+import java.util.Map;
 import com.heishandashu.ironfarm.engine.config.ModSettings;
 import com.heishandashu.ironfarm.engine.eval.ConditionEngine;
 import com.heishandashu.ironfarm.engine.eval.VillagerReport;
@@ -103,8 +104,24 @@ public final class IronFarmClientState {
     private IronFarmClientState() {
         // 注入物品名解析器：引擎不含 Minecraft，拿不到本地化物品名，
         // 必须由适配层提供（否则界面显示 iron_ingot 这种原始 ID）。
-        this.uiModel.setItemNameResolver(id -> {
+        applyItemNameResolver(this.uiModel);
+    }
+
+    /**
+     * 给 UiModel 注入物品名解析器，**跟随模组语言**。
+     *
+     * <p><b>⚠ 为什么不用 getHoverName()：</b>它走 Minecraft 的**游戏语言**，
+     * 不跟模组设置里的语言开关。用户把模组设成中文、游戏设为英文时，
+     * 物品名就显示成 Iron Ingot / iron_ingot —— 这正是反馈的现象。</p>
+     */
+    private static void applyItemNameResolver(UiModel ui) {
+        ui.setItemNameResolver(id -> {
             try {
+                String localized = itemNameTable().get(id);
+                if (localized != null && !localized.isEmpty()) {
+                    return localized;
+                }
+                // 表里没有（模组物品未覆盖）就退回原版行为。
                 var rl = net.minecraft.resources.Identifier.tryParse(id);
                 if (rl == null) {
                     return null;
@@ -113,19 +130,86 @@ public final class IronFarmClientState {
                 if (item == null) {
                     return null;
                 }
-                String name = new net.minecraft.world.item.ItemStack(item).getHoverName().getString();
-                if (DIAG_SHOWN < 5) {
-                    DIAG_SHOWN++;
-                    org.slf4j.LoggerFactory.getLogger("ironfarm").info(
-                            "[ironfarm] ITEMNAME id=" + id + " item=" + item + " name=" + name);
-                }
-                return name;
+                return new net.minecraft.world.item.ItemStack(item)
+                        .getHoverName().getString();
             } catch (RuntimeException e) {
                 org.slf4j.LoggerFactory.getLogger("ironfarm")
                         .warn("[ironfarm] ITEMNAME failed for " + id, e);
                 return null;
             }
         });
+    }
+
+    // ---- 物品名表（跟随模组语言，而不是游戏语言）----
+
+    /** 缓存的语言代码（表变了要重建）。 */
+    private static volatile String itemNameLang;
+
+    /** 物品注册名 → 本地化名字。 */
+    private static volatile Map<String, String> itemNameCache = java.util.Collections.emptyMap();
+
+    /**
+     * 取物品名表，按**模组设置里的语言**加载。
+     *
+     * <p>数据来源：MC 自带语言文件 {@code assets/minecraft/lang/<lang>.json}，
+     * 键是物品的 {@code getDescriptionId()}（如 {@code item.minecraft.iron_ingot}）。</p>
+     */
+    private static Map<String, String> itemNameTable() {
+        String want = IronFarmClientState.get().settings().effectiveLocale();
+        if (want.equals(itemNameLang)) {
+            return itemNameCache;
+        }
+        try {
+            Map<String, String> loaded = loadItemNames(want);
+            if (loaded != null && !loaded.isEmpty()) {
+                itemNameCache = loaded;
+                itemNameLang = want;
+            }
+        } catch (Exception e) {
+            org.slf4j.LoggerFactory.getLogger("ironfarm")
+                    .warn("[ironfarm] ITEMNAME table load failed for " + want, e);
+        }
+        return itemNameCache;
+    }
+
+    /** 真正加载：读 assets/minecraft/lang/<lang>.json，转成"注册名 → 名字"。 */
+    private static Map<String, String> loadItemNames(String langCode) throws Exception {
+        var mc = net.minecraft.client.Minecraft.getInstance();
+        if (mc == null) {
+            return null;
+        }
+        var rm = mc.getResourceManager();
+        if (rm == null) {
+            return null;
+        }
+        var loc = net.minecraft.resources.Identifier.fromNamespaceAndPath(
+                "minecraft", "lang/" + langCode + ".json");
+        var stack = rm.getResourceStack(loc);
+        if (stack == null || stack.isEmpty()) {
+            return null;
+        }
+        Map<String, String> raw = new java.util.HashMap<String, String>();
+        for (var res : stack) {
+            try (var in = res.open()) {
+                net.minecraft.locale.Language.loadFromJson(in, raw::put);
+            }
+        }
+        if (raw.isEmpty()) {
+            return null;
+        }
+        Map<String, String> out = new java.util.HashMap<String, String>();
+        for (var item : net.minecraft.core.registries.BuiltInRegistries.ITEM) {
+            String descId = item.getDescriptionId();
+            String name = raw.get(descId);
+            if (name == null) {
+                continue;
+            }
+            var key = net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(item);
+            if (key != null) {
+                out.put(key.toString(), name);
+            }
+        }
+        return out;
     }
 
     // ==================================================================
