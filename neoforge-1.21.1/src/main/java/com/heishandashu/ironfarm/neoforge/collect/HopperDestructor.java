@@ -37,7 +37,7 @@ import net.minecraft.world.level.chunk.LevelChunk;
  *
  * <ol>
  *   <li><b>重建目标列表</b>：每 {@link #TRACK_REBUILD_TICKS} tick 一次，
- *       只扫 {@link #SCAN_RADIUS} 格内的**已加载**区块
+ *       遍历**所有会 tick 的已加载区块**（不按玩家距离裁剪）
  *       （{@code getChunkNow}，不会触发加载）。</li>
  *   <li><b>逐漏斗清理</b>：每 {@link #CLEAR_CHECK_TICKS} tick 一次，
  *       只看第 1 步登记下来的那几个漏斗 —— 通常 1~5 个，
@@ -55,15 +55,6 @@ public final class HopperDestructor {
 
     /** 诊断日志限流。 */
     private static long lastLogMillis;
-
-    /**
-     * 重建目标列表的扫描半径（格）。
-     *
-     * <p>第一版是 64 格（121 个区块）。漏斗销毁是**局部功能** ——
-     * 玩家站在机器旁边才有意义，隔 40 格外的漏斗清不清空没人看得到。
-     * 缩到 24 格后只扫 3×3=9 个区块，开销降到 1/13。</p>
-     */
-    private static final double SCAN_RADIUS = 24.0;
 
     /**
      * 每多少个 tick 重建一次目标列表。
@@ -152,56 +143,61 @@ public final class HopperDestructor {
     private void rebuildTargets(ServerLevel level, BlockPos center) {
         targets.clear();
 
-        // ⚠ center 可能是 null（服务端 tick 里没有"当前玩家"）。
-        //   0.41.0 漏了这个判断，在 center.getX() 上抛 NPE，
-        //   每 tick 一次、堆栈刷屏，直接把游戏拖死。
-        if (center == null) {
-            var players = level.players();
-            if (players.isEmpty()) {
-                return;
+        // ⚠ 不再以玩家为中心按固定半径扫描！
+        //
+        //   0.51.0 及之前只扫玩家周围 24 格 —— 玩家走远一点就不统计了。
+        //   用户反馈"距离稍微远一点就不统计"就是这个。
+        //
+        //   现在收集**所有会 tick 的区块**：
+        //     ① 每个玩家视距范围内的区块
+        //     ② 强制加载的区块（chunk loader / 出生点）
+        //   两者的并集就是服务器真正在 tick 的范围 ——
+        //   漏斗只在这个范围内工作，所以这也是唯一需要统计的范围。
+        java.util.Set<Long> chunkKeys = new java.util.HashSet<Long>();
+
+        int viewDist = level.getServer().getPlayerList().getViewDistance();
+        for (var player : level.players()) {
+            var cp = player.chunkPosition();
+            for (int dx = -viewDist; dx <= viewDist; dx++) {
+                for (int dz = -viewDist; dz <= viewDist; dz++) {
+                    chunkKeys.add(net.minecraft.world.level.ChunkPos.asLong(
+                            cp.x + dx, cp.z + dz));
+                }
             }
-            center = players.get(0).blockPosition();
         }
 
-        int chunkR = ((int) SCAN_RADIUS >> 4) + 1;
-        int ccx = center.getX() >> 4;
-        int ccz = center.getZ() >> 4;
-        int radiusSq = (int) (SCAN_RADIUS * SCAN_RADIUS);
-        int hoppersSeen = 0;
-        int chunksLoaded = 0;
+        // 强制加载区块：机器常常用 chunk loader 保活，玩家不在也能跑。
+        for (long forcedKey : level.getForcedChunks()) {
+            chunkKeys.add(forcedKey);
+        }
 
-        for (int cx = ccx - chunkR; cx <= ccx + chunkR; cx++) {
-            for (int cz = ccz - chunkR; cz <= ccz + chunkR; cz++) {
-                // ⚠ getChunkNow 只返回已加载区块，不会触发加载。
-                LevelChunk chunk = level.getChunkSource().getChunkNow(cx, cz);
-                if (chunk == null) {
+        int[] counters = new int[2];   // [0]=chunks, [1]=hoppers
+        for (long key : chunkKeys) {
+            int cx = net.minecraft.world.level.ChunkPos.getX(key);
+            int cz = net.minecraft.world.level.ChunkPos.getZ(key);
+            // getChunkNow 只返回已加载区块，不会触发加载
+            LevelChunk chunk = level.getChunkSource().getChunkNow(cx, cz);
+            if (chunk == null) {
+                continue;
+            }
+            counters[0]++;
+            for (BlockEntity be : chunk.getBlockEntities().values()) {
+                if (!(be instanceof HopperBlockEntity hopper)) {
                     continue;
                 }
-                chunksLoaded++;
-                for (BlockEntity be : chunk.getBlockEntities().values()) {
-                    if (!(be instanceof HopperBlockEntity hopper)) {
-                        continue;
-                    }
-                    hoppersSeen++;
-                    BlockPos p = hopper.getBlockPos();
-                    if (p.distSqr(center) > radiusSq) {
-                        continue;
-                    }
-                    if (pointsAtWool(level, hopper)) {
-                        targets.add(p.asLong());
-                    }
+                counters[1]++;
+                if (pointsAtWool(level, hopper)) {
+                    targets.add(hopper.getBlockPos().asLong());
                 }
             }
         }
-        // 诊断：这是判断"到底哪一步没生效"的关键日志。
-        //   chunksLoaded=0        → 区块没加载（玩家不在附近？）
-        //   hoppersSeen=0         → 附近确实没有漏斗
-        //   pointing=0 但 seen>0  → 有漏斗但不指向白色羊毛（朝向/方块判定问题）
+
+        // 诊断：判断"到底哪一步没生效"。
         long nowMs = System.currentTimeMillis();
         if (nowMs - lastLogMillis > 4000) {
             lastLogMillis = nowMs;
             LOG.info("[ironfarm] HOPPER scan: chunks={}, hoppers={}, pointingAtWhiteWool={}",
-                    chunksLoaded, hoppersSeen, targets.size());
+                    counters[0], counters[1], targets.size());
         }
     }
 
