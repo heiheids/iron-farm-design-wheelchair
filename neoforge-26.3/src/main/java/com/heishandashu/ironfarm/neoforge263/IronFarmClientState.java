@@ -14,13 +14,13 @@ import com.heishandashu.ironfarm.engine.spawn.SpawnScanner;
 import com.heishandashu.ironfarm.engine.stats.StatsRecorder;
 import com.heishandashu.ironfarm.engine.ui.UiModel;
 import com.heishandashu.ironfarm.engine.version.VersionProfile;
-import com.heishandashu.ironfarm.fabric263.adapter.WorldBlockQuery;
-import com.heishandashu.ironfarm.fabric263.adapter.WorldSightQuery;
-import com.heishandashu.ironfarm.fabric263.collect.ScaryMobCollector;
-import com.heishandashu.ironfarm.fabric263.collect.SingleplayerBridge;
-import com.heishandashu.ironfarm.fabric263.collect.VillagerCollector;
-import com.heishandashu.ironfarm.fabric263.config.SettingsIO;
-import com.heishandashu.ironfarm.fabric263.config.StatsIO;
+import com.heishandashu.ironfarm.neoforge263.adapter.WorldBlockQuery;
+import com.heishandashu.ironfarm.neoforge263.adapter.WorldSightQuery;
+import com.heishandashu.ironfarm.neoforge263.collect.ScaryMobCollector;
+import com.heishandashu.ironfarm.neoforge263.collect.SingleplayerBridge;
+import com.heishandashu.ironfarm.neoforge263.collect.VillagerCollector;
+import com.heishandashu.ironfarm.neoforge263.config.SettingsIO;
+import com.heishandashu.ironfarm.neoforge263.config.StatsIO;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.world.entity.Entity;
@@ -89,7 +89,7 @@ public final class IronFarmClientState {
     private long lastScanTick = -1;
     private long lastGameTime = 0;
     /** 漏斗销毁器：延迟创建（需要 stats 已就绪）。 */
-    private com.heishandashu.ironfarm.fabric263.collect.HopperDestructor hopperDestructor;
+    private com.heishandashu.ironfarm.neoforge263.collect.HopperDestructor hopperDestructor;
     /** 上次记录"真实召唤尝试"的游戏时间。 */
     private long lastAttemptTick = -1;
     /** 上次自动保存统计的时刻（游戏时间）。 */
@@ -280,7 +280,7 @@ public final class IronFarmClientState {
         if (hopperDestructor == null) {
             // 传 supplier：loadStats() 会替换 stats 字段，
             // 缓存旧引用会导致统计写进被丢弃的对象。
-            hopperDestructor = new com.heishandashu.ironfarm.fabric263.collect.HopperDestructor(
+            hopperDestructor = new com.heishandashu.ironfarm.neoforge263.collect.HopperDestructor(
                     this::stats);
         }
         for (ServerLevel level : server.getAllLevels()) {

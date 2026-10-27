@@ -9,7 +9,7 @@
 $ErrorActionPreference = 'Stop'
 
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
-$Version = '0.43.0'
+$Version = '0.44.0'
 $StageName = "ironfarm-$Version"
 $Stage = Join-Path $Root "build/pack/$StageName"
 $ZipPath = Join-Path $Root "刷铁机设计轮椅-$Version.zip"
@@ -123,7 +123,7 @@ Copy-Item (Join-Path $Root 'docs') (Join-Path $srcDir 'docs') -Recurse -Force
 $docDir = Join-Path $Stage '文档'
 New-Item -ItemType Directory -Force -Path $docDir | Out-Null
 foreach ($f in @('使用说明-中文.txt', '使用说明-英文.txt', '技术说明.txt', '技术说明-英文.txt',
-                 '刷铁机设计轮椅-经验与踩坑.txt')) {
+                 '刷铁机设计轮椅-经验与踩坑.txt', '备份与恢复说明.txt')) {
     Copy-Item (Join-Path $Root $f) (Join-Path $docDir $f) -Force
 }
 
