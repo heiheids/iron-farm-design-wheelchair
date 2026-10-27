@@ -37,7 +37,7 @@ import net.minecraft.world.level.chunk.LevelChunk;
  *
  * <ol>
  *   <li><b>重建目标列表</b>：每 {@link #TRACK_REBUILD_TICKS} tick 一次，
- *       只扫 {@link #SCAN_RADIUS} 格内的**已加载**区块
+ *       遍历**所有会 tick 的已加载区块**（不按玩家距离裁剪）
  *       （{@code getChunkNow}，不会触发加载）。</li>
  *   <li><b>逐漏斗清理</b>：每 {@link #CLEAR_CHECK_TICKS} tick 一次，
  *       只看第 1 步登记下来的那几个漏斗 —— 通常 1~5 个，
@@ -55,21 +55,6 @@ public final class HopperDestructor {
 
     /** 诊断日志限流。 */
     private static long lastLogMillis;
-
-    /** 诊断：销毁次数计数（只打前 10 条）。 */
-    private static int DESTROYED;
-
-    /** 诊断：漏斗详情只打前 5 条。 */
-    private static int DIAG_HOPPER;
-
-    /**
-     * 重建目标列表的扫描半径（格）。
-     *
-     * <p>第一版是 64 格（121 个区块）。漏斗销毁是**局部功能** ——
-     * 玩家站在机器旁边才有意义，隔 40 格外的漏斗清不清空没人看得到。
-     * 缩到 24 格后只扫 3×3=9 个区块，开销降到 1/13。</p>
-     */
-    private static final double SCAN_RADIUS = 24.0;
 
     /**
      * 每多少个 tick 重建一次目标列表。
@@ -158,70 +143,44 @@ public final class HopperDestructor {
     private void rebuildTargets(ServerLevel level, BlockPos center) {
         targets.clear();
 
-        // ⚠ center 可能是 null（服务端 tick 里没有"当前玩家"）。
-        //   0.41.0 漏了这个判断，在 center.getX() 上抛 NPE，
-        //   每 tick 一次、堆栈刷屏，直接把游戏拖死。
-        if (center == null) {
-            var players = level.players();
-            if (players.isEmpty()) {
-                return;
-            }
-            center = players.get(0).blockPosition();
-        }
-
-        int chunkR = ((int) SCAN_RADIUS >> 4) + 1;
-        int ccx = center.getX() >> 4;
-        int ccz = center.getZ() >> 4;
-        int radiusSq = (int) (SCAN_RADIUS * SCAN_RADIUS);
-        int hoppersSeen = 0;
-        int chunksLoaded = 0;
-
-        for (int cx = ccx - chunkR; cx <= ccx + chunkR; cx++) {
-            for (int cz = ccz - chunkR; cz <= ccz + chunkR; cz++) {
-                // ⚠ getChunkNow 只返回已加载区块，不会触发加载。
-                LevelChunk chunk = level.getChunkSource().getChunkNow(cx, cz);
-                if (chunk == null) {
+        // ⚠ 不再以玩家为中心按半径扫描！
+        //
+        //   0.52.0 之前的实现只扫玩家周围 24 格 —— 玩家走远一点，
+        //   机器就不统计了。这是用户反馈的"距离稍微远一点就不统计"的根因。
+        //
+        //   现在改为遍历**所有会 tick 的已加载区块**
+        //   （ChunkMap.forEachBlockTickingChunk）。
+        //
+        //   为什么是这个范围而不是"全部已加载区块"：
+        //   漏斗只有在区块**实体 tick**时才会搬运物品。
+        //   不 tick 的区块里，漏斗是静止的，不会有新物品进来，
+        //   统计它既没有意义、也会白白增加开销。
+        //
+        //   forEachBlockTickingChunk 覆盖：玩家附近的区块 + 强制加载区块
+        //   （刷铁机通常用 chunk loader 强制加载，正好落在范围内）。
+        int[] counters = new int[2];   // [0]=chunks, [1]=hoppers
+        level.getChunkSource().chunkMap.forEachBlockTickingChunk(chunk -> {
+            counters[0]++;
+            for (BlockEntity be : chunk.getBlockEntities().values()) {
+                if (!(be instanceof HopperBlockEntity hopper)) {
                     continue;
                 }
-                chunksLoaded++;
-                for (BlockEntity be : chunk.getBlockEntities().values()) {
-                    if (!(be instanceof HopperBlockEntity hopper)) {
-                        continue;
-                    }
-                    hoppersSeen++;
-                    BlockPos p = hopper.getBlockPos();
-                    if (p.distSqr(center) > radiusSq) {
-                        continue;
-                    }
-                    // 诊断：打印每个漏斗的朝向和目标方块名，
-                    // 这样才能判断"不是白色羊毛"还是"方块名对不上"。
-                    if (DIAG_HOPPER < 5) {
-                        DIAG_HOPPER++;
-                        BlockState hs = level.getBlockState(p);
-                        Direction f = hs.hasProperty(HopperBlock.FACING)
-                                ? hs.getValue(HopperBlock.FACING) : null;
-                        BlockPos tp = f == null ? p : p.relative(f);
-                        Identifier tid = net.minecraft.core.registries.BuiltInRegistries.BLOCK
-                                .getKey(level.getBlockState(tp).getBlock());
-                        LOG.info("[ironfarm] HOPPER detail pos=" + p.toShortString()
-                                + " facing=" + f + " target=" + tp.toShortString()
-                                + " block=" + tid);
-                    }
-                    if (pointsAtWool(level, hopper)) {
-                        targets.add(p.asLong());
-                    }
+                counters[1]++;
+                if (pointsAtWool(level, hopper)) {
+                    targets.add(hopper.getBlockPos().asLong());
                 }
             }
-        }
-        // 诊断：这是判断"到底哪一步没生效"的关键日志。
-        //   chunksLoaded=0        → 区块没加载（玩家不在附近？）
-        //   hoppersSeen=0         → 附近确实没有漏斗
-        //   pointing=0 但 seen>0  → 有漏斗但不指向白色羊毛（朝向/方块判定问题）
+        });
+
+        // 诊断：判断"到底哪一步没生效"。
+        //   chunks=0             → 一个 ticking 区块都没有
+        //   hoppers=0            → 全图没有漏斗
+        //   pointing=0 但 has>0  → 有漏斗但不指向白色羊毛
         long nowMs = System.currentTimeMillis();
         if (nowMs - lastLogMillis > 4000) {
             lastLogMillis = nowMs;
             LOG.info("[ironfarm] HOPPER scan: chunks={}, hoppers={}, pointingAtWhiteWool={}",
-                    chunksLoaded, hoppersSeen, targets.size());
+                    counters[0], counters[1], targets.size());
         }
     }
 
@@ -231,9 +190,6 @@ public final class HopperDestructor {
 
     private void clearTracked(ServerLevel level, long now) {
         // 这层不依赖 center，center 为 null 也能正常清理已登记的漏斗。
-        int reached = 0;
-        int foundHopper = 0;
-        int hadItems = 0;
         if (targets.isEmpty()) {
             return;
         }
@@ -258,19 +214,7 @@ public final class HopperDestructor {
                 targets.remove(key);
                 continue;
             }
-            foundHopper++;
-            if (!isEmptyHopper(hopper)) {
-                hadItems++;
-            }
             clearAndRecord(hopper, now);
-        }
-        // 诊断：三层数字分别对应"登记了几个 / 是不是漏斗 / 里面有没有东西"。
-        long nowMs2 = System.currentTimeMillis();
-        if (nowMs2 - lastLogMillis > 4000) {
-            lastLogMillis = nowMs2;
-            LOG.info("[ironfarm] HOPPER clear: tracked=" + keys.length
-                    + ", hoppers=" + foundHopper + ", hadItems=" + hadItems)
-                    ;
         }
     }
 
@@ -282,16 +226,6 @@ public final class HopperDestructor {
      * <p>没有物品时直接返回，不写 setChanged() ——
      * 否则每 8 tick 都会把区块标脏，反而增加存档压力。</p>
      */
-    /** 诊断用：漏斗里有没有物品。 */
-    private static boolean isEmptyHopper(HopperBlockEntity hopper) {
-        for (int i = 0; i < hopper.getContainerSize(); i++) {
-            if (!hopper.getItem(i).isEmpty()) {
-                return false;
-            }
-        }
-        return true;
-    }
-
     private void clearAndRecord(HopperBlockEntity hopper, long now) {
         boolean any = false;
         for (int i = 0; i < hopper.getContainerSize(); i++) {
@@ -303,11 +237,6 @@ public final class HopperDestructor {
                     .getKey(stack.getItem());
             if (id != null) {
                 statsSupplier.get().itemDestroy().record(now, id.toString(), stack.getCount());
-                DESTROYED++;
-                if (DESTROYED <= 10) {
-                    LOG.info("[ironfarm] DESTROY item=" + id + " count=" + stack.getCount()
-                            + " totalItems=" + statsSupplier.get().itemDestroy().totalItems());
-                }
             }
             any = true;
         }
