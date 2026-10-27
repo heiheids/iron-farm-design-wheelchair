@@ -186,12 +186,21 @@ Write-Host "测试：$totalTests 条，失败 $totalFail，错误 $totalErr"
 # 每个模块的 jar 名字不同（fabric/neoforge + 版本号），
 # 所以按模块目录取，不按文件名猜。
 # ---------------------------------------------------------------------------
+# 部署目录：优先读环境变量，没配置就跳过部署（只打包）。
+#
+# 开源版不写死任何本机路径 —— 每个人把 jar 放进自己的 mods 目录即可。
+# 想自动部署的人可以在系统里设这四个环境变量：
+#   IRONFARM_DIR_FABRIC_1211 / IRONFARM_DIR_NEOFORGE_1211
+#   IRONFARM_DIR_FABRIC_263   / IRONFARM_DIR_NEOFORGE_263
+#
+# ⚠ 顺带说明：如果没有 Neoforge 26.3 的构建产物（需要联网拉 NeoForm），
+#   这一项会在下面被跳过，不影响其余三版打包。
 $DeployTargets = @(
-    @{ Module = 'fabric-1.21.1';   Dir = 'D:\1.21.1F-NF\.minecraft\versions\1.21.1-Fabric\mods' },
-    @{ Module = 'neoforge-1.21.1'; Dir = 'D:\1.21.1F-NF\.minecraft\versions\1.21.1-NeoForge\mods' },
-    @{ Module = 'fabric-26.3';     Dir = 'D:\26.3F\.minecraft\versions\26.3-Fabric\mods' },
-    @{ Module = 'neoforge-26.3';   Dir = 'D:\26.3F\.minecraft\versions\26.3-NeoForge086\mods' }
-)
+    @{ Module = 'fabric-1.21.1';   Dir = $env:IRONFARM_DIR_FABRIC_1211 },
+    @{ Module = 'neoforge-1.21.1'; Dir = $env:IRONFARM_DIR_NEOFORGE_1211 },
+    @{ Module = 'fabric-26.3';     Dir = $env:IRONFARM_DIR_FABRIC_263 },
+    @{ Module = 'neoforge-26.3';   Dir = $env:IRONFARM_DIR_NEOFORGE_263 }
+) | Where-Object { $_.Dir }
 
 foreach ($t in $DeployTargets) {
     $libsDir = Join-Path $Root "$($t.Module)/build/libs"

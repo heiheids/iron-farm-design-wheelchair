@@ -54,7 +54,7 @@ if (-not $mc) {
 # 3) 找 JDK（需要 22+ 才能用 java.lang.classfile）
 $java = $null
 $jdks = @(
-    'D:\工程-泡世界\mcmod\tools\jdk25\bin\java.exe',
+    "$env:JAVA_HOME\bin\java.exe",
     "$env:JAVA_HOME\bin\java.exe"
 )
 foreach ($j in $jdks) {

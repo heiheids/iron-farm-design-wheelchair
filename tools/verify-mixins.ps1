@@ -49,7 +49,7 @@ if (-not (Test-Path $mixinJson)) {
 
 # 4) java
 $java = $null
-foreach ($j in @('D:\工程-泡世界\mcmod\tools\jdk25\bin\java.exe', "$env:JAVA_HOME\bin\java.exe")) {
+foreach ($j in @("$env:JAVA_HOME\bin\java.exe")) {
     if ($j -and (Test-Path $j)) { $java = $j; break }
 }
 

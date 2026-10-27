@@ -101,7 +101,7 @@
     Loom 1.18.4 + JDK 25      → 通过
 
   所以本工程必须：
-    JAVA_HOME = D:\工程-泡世界\mcmod\tools\jdk25   （跑 Gradle）
+    JAVA_HOME = <JDK25 路径>   （跑 Gradle）
     编译目标 release = 21                          （1.21.1 需要）
   engine 模块刻意用 release 17，这样它在 17/21/25 上都能加载。
 
@@ -1015,7 +1015,7 @@
 ----------------------------------------------------------------
 
 【约定】构建产物自动部署到
-    D:\1.21.1F-NF\.minecraft\versions\1.21.1-Fabric\mods
+    <客户端>\.minecraft\versions\1.21.1-Fabric\mods
 由 tools/pack.ps1 第 7 步完成，不再手工拷贝。
 
 【坑 66】旧版本不删，游戏直接启动失败
@@ -2309,7 +2309,7 @@
     1. 从 nfrt 缓存找 recompile_*.jar（已应用 AT、含 MC 类）
        $env:USERPROFILE\.gradle\caches\neoformruntime\intermediate_results
     2. classpath = recompile jar + neoforge universal jar
-                  + D:\26.3F\.minecraft\libraries 下全部 jar
+                  + <客户端>\.minecraft\libraries 下全部 jar
                   + engine jar
     3. javac --release 25 -d out @sources.txt
     4. 拿上一次的 jar 当模板，删旧 class、加新 class、
