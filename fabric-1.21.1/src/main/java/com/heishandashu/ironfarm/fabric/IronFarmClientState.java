@@ -302,7 +302,7 @@ public final class IronFarmClientState {
     // ==================================================================
 
     public void tick(Minecraft mc) {
-        if (!settings.masterEnabled) {
+        if (!settings.isActive()) {
             return;
         }
         ClientLevel level = mc.level;
@@ -366,6 +366,11 @@ public final class IronFarmClientState {
      * 功能完全静默失效（26.3 上已经栽过一次）。</p>
      */
     public void tickHopperOnServer(MinecraftServer server) {
+        // ⚠ 主开关优先：关掉后模组完全停止工作，漏斗销毁也不做。
+        //   这一条曾经漏过，导致「主开关关了，漏斗还在销毁物品」。
+        if (!settings.isActive()) {
+            return;
+        }
         if (!settings.woolHopperEnabled) {
             return;
         }
