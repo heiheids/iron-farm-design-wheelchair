@@ -69,7 +69,7 @@ public final class WorldOverlayRenderer {
             return;
         }
         IronFarmClientState state = IronFarmClientState.get();
-        if (!state.settings().masterEnabled) {
+        if (!state.settings().isActive()) {
             return;
         }
 
@@ -121,7 +121,7 @@ public final class WorldOverlayRenderer {
             return;
         }
         IronFarmClientState state = IronFarmClientState.get();
-        if (!state.settings().masterEnabled || !state.settings().villagerOverlayEnabled) {
+        if (!state.settings().isActive() || !state.settings().villagerOverlayEnabled) {
             return;
         }
 
