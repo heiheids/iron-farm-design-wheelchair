@@ -99,7 +99,7 @@ public final class WorldOverlayRenderer {
             return;
         }
         IronFarmClientState state = IronFarmClientState.get();
-        if (!state.settings().masterEnabled) {
+        if (!state.settings().isActive()) {
             return;
         }
         com.heishandashu.ironfarm.neoforge.Diagnostics.onRenderCallback(state.lastGameTime());
