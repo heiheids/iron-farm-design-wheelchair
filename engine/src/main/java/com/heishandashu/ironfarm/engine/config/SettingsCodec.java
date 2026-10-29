@@ -58,6 +58,7 @@ public final class SettingsCodec {
         out.write("\n");
         out.write("# ---- 六个开关 / the six switches ----\n");
         out.write("masterEnabled=" + s.masterEnabled + "\n");
+        out.write("rightClickVillagerEnabled=" + s.rightClickVillagerEnabled + "\n");
         out.write("villagerOverlayEnabled=" + s.villagerOverlayEnabled + "\n");
         out.write("bedLinesEnabled=" + s.bedLinesEnabled + "\n");
         out.write("spawnBoxEnabled=" + s.spawnBoxEnabled + "\n");
@@ -112,6 +113,7 @@ public final class SettingsCodec {
     /** 把键值对应用到一个已有的设置对象上（用于"热重载"）。 */
     public static void apply(ModSettings s, Map<String, String> kv) {
         s.masterEnabled = bool(kv, "masterEnabled", s.masterEnabled);
+        s.rightClickVillagerEnabled = bool(kv, "rightClickVillagerEnabled", s.rightClickVillagerEnabled);
         s.villagerOverlayEnabled = bool(kv, "villagerOverlayEnabled", s.villagerOverlayEnabled);
         s.bedLinesEnabled = bool(kv, "bedLinesEnabled", s.bedLinesEnabled);
         s.spawnBoxEnabled = bool(kv, "spawnBoxEnabled", s.spawnBoxEnabled);
