@@ -67,7 +67,9 @@ public final class RightClickHandler {
         Villager v = (Villager) entity;
 
         IronFarmClientState state = IronFarmClientState.get();
-        if (!state.settings().masterEnabled) {
+        // 右键开关：与主开关分开控制。
+        // 关掉后右键村民不弹任何窗口，交还原版（交易仍然可用）。
+        if (!state.settings().canRightClickVillager()) {
             return InteractionResult.PASS;
         }
 
