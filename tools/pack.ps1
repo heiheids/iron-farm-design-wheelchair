@@ -1,4 +1,4 @@
-﻿# 打包脚本：把程序 + 源码 + 四种文档打成一个 zip
+﻿﻿﻿# 打包脚本：把程序 + 源码 + 四种文档打成一个 zip
 #
 # 用法（从工程根目录）：
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tools\pack.ps1
@@ -9,7 +9,9 @@
 $ErrorActionPreference = 'Stop'
 
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
-$Version = '0.52.0'
+# 版本号从 gradle.properties 读，不写死 ——
+# 写死过一次，结果部署了旧 jar（见经验总结 B9 节）。
+$Version = ((Select-String -Path (Join-Path $Root 'gradle.properties') -Pattern '^mod_version=(.+)$').Matches[0].Groups[1].Value).Trim()
 $StageName = "ironfarm-$Version"
 $Stage = Join-Path $Root "build/pack/$StageName"
 $ZipPath = Join-Path $Root "刷铁机设计轮椅-$Version.zip"
