@@ -19,8 +19,30 @@ public final class ModSettings {
     // 需求指定的六个开关
     // ==================================================================
 
-    /** 一、模组总开关。关掉后所有功能停止，包括头顶图标与统计。 */
+    /**
+     * 一、模组总开关。
+     *
+     * <p><b>关掉后模组完全停止工作</b>，不是「只关显示」：</p>
+     * <ul>
+     *   <li>不再扫描世界、不再收集村民数据</li>
+     *   <li>不再统计铁傀儡产量</li>
+     *   <li>不再执行漏斗销毁（不销毁任何物品）</li>
+     *   <li>不再注册右键交互、不再画图标与线条</li>
+     * </ul>
+     *
+     * <p>等价于「把这个模组卸载掉」。</p>
+     */
     public boolean masterEnabled = true;
+
+    /**
+     * 右键村民打开信息页。
+     *
+     * <p>关掉后右键村民不会弹任何窗口，交还原版（村民仍然可以交易）。</p>
+     *
+     * <p>⚠ 与主开关的区别：主开关关掉是「模组完全不工作」；
+     * 这个开关只关掉右键交互，其他功能（图标、统计、漏斗销毁）照常。</p>
+     */
+    public boolean rightClickVillagerEnabled = true;
 
     /** 二、村民头顶信息显示开关（三个图标）。 */
     public boolean villagerOverlayEnabled = true;
@@ -127,6 +149,10 @@ public final class ModSettings {
         s.scaryMobStrictMode = scaryMobStrictMode;
         s.statsRecordFailures = statsRecordFailures;
         s.chatNotifyOnSpawn = chatNotifyOnSpawn;
+        // ⚠ 这两个曾经漏掉：copy() 少拷一个字段，
+        //   表现是「改完设置点保存，这个开关又变回默认值」。
+        s.woolHopperEnabled = woolHopperEnabled;
+        s.rightClickVillagerEnabled = rightClickVillagerEnabled;
         return s;
     }
 
@@ -142,7 +168,27 @@ public final class ModSettings {
 
     /** 是否需要扫描世界数据（全部显示开关都关掉时可以不扫）。 */
     public boolean needsWorldScan() {
-        return masterEnabled && anyWorldOverlayEnabled();
+        return isActive() && anyWorldOverlayEnabled();
+    }
+
+    /**
+     * 模组是否应当工作。
+     *
+     * <p><b>所有功能入口都必须先问这个</b>（扫描、统计、漏斗销毁、右键、渲染），
+     * 而不是各自判断 {@link #masterEnabled} ——
+     * 后者漏一处就会造成「主开关关不干净」。</p>
+     */
+    public boolean isActive() {
+        return masterEnabled;
+    }
+
+    /**
+     * 右键交互是否可用。
+     *
+     * <p>需要同时满足：模组在工作 + 右键开关打开。</p>
+     */
+    public boolean canRightClickVillager() {
+        return isActive() && rightClickVillagerEnabled;
     }
 
     /** 解析实际使用的语言代码（处理 "auto"）。 */
