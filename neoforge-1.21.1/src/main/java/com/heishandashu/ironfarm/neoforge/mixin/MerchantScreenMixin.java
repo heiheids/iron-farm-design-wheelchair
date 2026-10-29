@@ -48,7 +48,9 @@ public abstract class MerchantScreenMixin implements ScreenInvoker {
             return;
         }
         IronFarmClientState state = IronFarmClientState.get();
-        if (!state.settings().masterEnabled) {
+        // 交易界面的「看状态」按钮同样受右键开关控制，
+        // 否则关掉右键后按钮还在，行为不一致。
+        if (!state.settings().canRightClickVillager()) {
             return;
         }
 
