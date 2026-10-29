@@ -1,4 +1,4 @@
-﻿# 引用完整性验证。
+﻿﻿﻿# 引用完整性验证。
 #
 # 为什么需要：本机跑不起 Minecraft 客户端（LWJGL/SDL 初始化失败），
 # 而模组的 environment 是 client，所以 gradle runServer 根本不会加载它 ——
@@ -57,8 +57,7 @@ $jdks = @(
     "$env:JAVA_HOME\bin\java.exe",
     "C:\Program Files\Java\jdk-25\bin\java.exe",
     "C:\Program Files\Eclipse Adoptium\jdk-25\bin\java.exe",
-    "$env:LOCALAPPDATA\Programs\Eclipse Adoptium\jdk-25\bin\java.exe",
-    "D:\工程-泡世界\mcmod\tools\jdk25\bin\java.exe"
+    "$env:LOCALAPPDATA\Programs\Eclipse Adoptium\jdk-25\bin\java.exe"
 )
 foreach ($j in $jdks) {
     if ($j -and (Test-Path $j)) { $java = $j; break }
