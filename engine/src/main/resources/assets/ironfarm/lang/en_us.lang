@@ -79,7 +79,7 @@ ironfarm.gui.villager_status.value=current %s, threshold %s
 # ---- GUI: settings ----
 ironfarm.gui.settings=Iron Farm Design Wheelchair - Settings
 ironfarm.gui.settings.master=Master switch
-ironfarm.gui.settings.master.desc=Turns off overlays, lines and statistics completely.
+ironfarm.gui.settings.master.desc=Stops the mod completely: no scanning, no statistics, no item voiding, no right-click. Same as uninstalling it.
 ironfarm.gui.settings.overlay=Villager overhead info
 ironfarm.gui.settings.overlay.desc=Shows three icons above each villager: conditions met, panicking, gossip baseline.
 ironfarm.gui.settings.bed_lines=Show bound beds
@@ -274,6 +274,9 @@ ironfarm.gui.items.none.tip=Point a hopper at a white wool block; its contents w
 ironfarm.gui.items.rule=White wool: destroy hopper contents
 
 ironfarm.gui.settings.wool_hopper=White wool hopper void
+ironfarm.gui.settings.wool_hopper.desc=Voids a hopper's contents when it points into white wool, and records what was destroyed. Singleplayer only.
+ironfarm.gui.settings.right_click=Right-click opens villager info
+ironfarm.gui.settings.right_click.desc=When off, right-clicking a villager no longer opens the info screen; vanilla behaviour (trading) is unaffected.
 
 ironfarm.gui.stats.elapsed=Recorded for
 ironfarm.gui.stats.elapsed.tip=Counted in game time, so it speeds up with tick accelerators
