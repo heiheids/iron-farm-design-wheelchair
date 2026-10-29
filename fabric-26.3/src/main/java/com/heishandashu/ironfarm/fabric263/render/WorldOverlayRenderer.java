@@ -62,7 +62,7 @@ public final class WorldOverlayRenderer {
             return;
         }
         IronFarmClientState state = IronFarmClientState.get();
-        if (!state.settings().masterEnabled) {
+        if (!state.settings().isActive()) {
             return;
         }
 
