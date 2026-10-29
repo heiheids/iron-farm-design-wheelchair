@@ -1,4 +1,4 @@
-﻿# Mixin 配置校验。
+﻿﻿﻿# Mixin 配置校验。
 #
 # 为什么需要：Mixin 的失败是**静默的** —— 目标方法名写错、目标类不存在、
 # @Shadow 字段拼错，编译全过、jar 能打出来，加载时只 warn 一句，
@@ -53,8 +53,7 @@ $jdks = @(
     "$env:JAVA_HOME\bin\java.exe",
     "C:\Program Files\Java\jdk-25\bin\java.exe",
     "C:\Program Files\Eclipse Adoptium\jdk-25\bin\java.exe",
-    "$env:LOCALAPPDATA\Programs\Eclipse Adoptium\jdk-25\bin\java.exe",
-    "D:\工程-泡世界\mcmod\tools\jdk25\bin\java.exe"
+    "$env:LOCALAPPDATA\Programs\Eclipse Adoptium\jdk-25\bin\java.exe"
 )
 foreach ($j in $jdks) {
     if ($j -and (Test-Path $j)) { $java = $j; break }
