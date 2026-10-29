@@ -96,7 +96,7 @@ public final class WorldOverlayRenderer {
             return;
         }
         IronFarmClientState state = IronFarmClientState.get();
-        if (!state.settings().masterEnabled) {
+        if (!state.settings().isActive()) {
             return;
         }
         com.heishandashu.ironfarm.fabric.Diagnostics.onRenderCallback(state.lastGameTime());
