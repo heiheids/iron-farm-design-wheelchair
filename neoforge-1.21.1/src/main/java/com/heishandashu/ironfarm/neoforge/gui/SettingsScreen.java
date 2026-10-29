@@ -168,9 +168,15 @@ public final class SettingsScreen extends Screen {
                 "ironfarm.gui.settings.golem_box",
                 () -> s.golemDetectBoxEnabled, v -> s.golemDetectBoxEnabled = v);
 
-        // 白色羊毛漏斗销毁（单独一行 —— 它是破坏性功能，视觉上要显眼）
-        y = addToggle(x, y, halfW * 2 + 6, "ironfarm.gui.settings.wool_hopper",
+        // 两个「功能开关」，并排一行。
+        // 与上面的「显示开关」区分：这两个会改变模组的行为，
+        // 而不只是画不画东西。
+        y = addToggle(x, y, halfW, "ironfarm.gui.settings.wool_hopper",
                 () -> s.woolHopperEnabled, v -> s.woolHopperEnabled = v);
+        addToggle(x + halfW + 6, y - ROW_HEIGHT, halfW,
+                "ironfarm.gui.settings.right_click",
+                () -> s.rightClickVillagerEnabled,
+                v -> s.rightClickVillagerEnabled = v);
 
         // 语言切换（单独一行）
         y += 6;
