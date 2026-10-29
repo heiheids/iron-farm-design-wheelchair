@@ -2931,3 +2931,164 @@
 
   【教训】跨版本抄代码后必须跑打包检查，
   两个版本的 API 表面相同，底层映射可能不一样。
+
+
+----------------------------------------------------------------
+四十、"只扫玩家附近"是个设计错误（第六十五轮）
+----------------------------------------------------------------
+【现象】统计漏斗销毁物品，距离稍微远一点就不统计了。
+
+【坑 148】把"性能优化"当成了"功能约束"
+  我最初写的是：
+      private static final double SCAN_RADIUS = 24.0;   // 只扫玩家周围 24 格
+
+  当时的理由是"漏斗销毁是局部功能，玩家站在机器旁边才有意义，
+  缩到 24 格能降低开销"。这个推理**在功能上是错的**：
+
+    · 刷铁机通常建在远离玩家活动区的地方
+    · 机器常用 chunk loader 强制加载，玩家根本不在附近
+    · 玩家站在机器旁边只是为了观察，不是为了"让它工作"
+
+  于是功能变成"只有玩家凑近才统计"，完全不符合预期。
+
+  【正确的范围】**所有会 tick 的已加载区块。**
+  理由：漏斗只有在区块实体 tick 时才搬运物品。
+  不在 tick 范围内的漏斗是静止的，本来就没有新物品进来。
+  所以"会 tick 的区块"既覆盖全部有效场景，又不会浪费开销。
+
+【坑 149】两个加载器版本的遍历 API 不一样
+  26.3：
+      level.getChunkSource().chunkMap.forEachBlockTickingChunk(chunk -> {...})
+      —— 直接给 LevelChunk，一步到位。
+
+  1.21.1：**没有这个方法**（我写探针验证过）。
+  只能用：
+      ① 所有玩家视距范围内的区块（getViewDistance + chunkPosition）
+      ② level.getForcedChunks() 强制加载区块
+      两者并集，再用 getChunkNow 取区块。
+
+  代码量差很多，但语义等价。
+
+  【教训】跨版本抄代码前，**先写一个小探针验证 API 存在**。
+  我这次写的探针：
+      final class ApiProbe {
+          static void probe(ServerLevel level) { /* 试调目标方法 */ }
+      }
+  编译一下就知道有没有。比"抄过去再看编译报错"快得多，
+  也不会污染主代码。
+
+【坑 150】改完后 SCAN_RADIUS 变成死代码
+  换实现后 SCAN_RADIUS 常量还在，但没人用了。
+  这类残留常量最容易被误读成"还是有距离限制"。
+  已删除，并同步修了类注释里"只扫 N 格"的描述。
+
+  【一般规律】删除功能时要连带清理：常量、注释、文档。
+  否则下一个人（包括三个月后的自己）会被误导。
+
+【顺带修的：打包脚本的 JDK 定位】
+  开源时我把 tools 里硬编码的 JDK 路径改成了 $env:JAVA_HOME，
+  但当前环境 JAVA_HOME 是空的，导致 verify-refs / verify-mixins
+  直接崩在"找不到 java"。
+
+  现在改成候选列表 + 回退：
+      $jdks = @(
+          "$env:JAVA_HOME\bin\java.exe",
+          "C:\Program Files\Java\jdk-25\bin\java.exe",
+          ...
+      )
+  开源用户和本机都能跑。
+
+----------------------------------------------------------------
+四十一、主开关只关了一半（第六十六轮）
+----------------------------------------------------------------
+【需求】"设置里增加功能，关闭右键打开村民信息。另外主开关的作用是
+        关闭所有功能，而不是显示问题，是模组就不工作了。"
+
+【坑 151】主开关只拦了"显示"，破坏性功能照常跑
+  查了一遍 masterEnabled 的使用点，发现它只在四处生效：
+      WorldOverlayRenderer   不画图标了
+      IronFarmClientState.tick  不再扫描世界
+      RightClickHandler      不响应右键
+      MerchantScreenMixin    不加按钮
+
+  但 **HopperDestructor 完全没有主开关判断**，
+  它只看 woolHopperEnabled：
+
+      public void tickHopperOnServer(MinecraftServer server) {
+          if (!settings.woolHopperEnabled) {   // ← 只有这一个
+              return;
+          }
+          ...
+
+  后果：玩家关掉主开关，以为模组停了，**漏斗还在销毁他的物品**。
+  这是破坏性功能，比"图标没关掉"严重一个量级。
+
+  【修法】主开关必须优先级最高，在所有功能入口先判断：
+      if (!settings.isActive()) { return; }   // 主开关
+      if (!settings.woolHopperEnabled) { return; }   // 功能开关
+
+  【一般规律】**"主开关"和"功能开关"必须是两层，不能平级。**
+  平级的话，每加一个新功能就多一个漏判的机会。
+  主开关应该是一个统一的 isActive()，所有入口先问它。
+
+【坑 152】不要到处写 masterEnabled，要抽成 isActive()
+  改之前，四个模块里散落着 `settings.masterEnabled` /
+  `state.settings().masterEnabled` 两种写法。
+  这种"每个地方自己判断"的结构，加功能时必然漏。
+
+  现在统一成 ModSettings.isActive()，
+  并用脚本把四处旧写法全替换掉，再 grep 确认零残留。
+
+  【检查手法】改完执行：
+      grep -rn "settings()\.masterEnabled\|settings\.masterEnabled" --include=*.java
+  零结果才算干净。
+
+【坑 153】copy() 漏字段 —— 又一个"编译器抓不到"的 bug
+  加完 rightClickVillagerEnabled 之后顺手看了 copy()，
+  发现它连**上一版就有的 woolHopperEnabled 都没拷**：
+
+      public ModSettings copy() {
+          ...
+          s.chatNotifyOnSpawn = chatNotifyOnSpawn;
+          // 到这里就结束了，woolHopperEnabled 呢？
+      }
+
+  表现是"改完设置点保存，这个开关又变回默认值"。
+  少写一行赋值照样能编译，单元测试也测不到（除非专门测 copy）。
+
+  【修法】copy() 补全 + 加测试 copyPreservesAllSwitches。
+  而且做了**反验证**：故意删掉一行拷贝，确认测试变红。
+  这是"守门工具要有反验证"的又一次应用。
+
+【坑 154】版本号又漂了 —— 同一个坑第二次踩
+  pack.ps1 里 `$Version = '0.52.0'` 是硬编码的。
+  这次把 gradle.properties 改成 0.53.0，
+  结果打包出来是**三个 0.52.0 + 一个 0.53.0 的混合版本**，
+  而且脚本一路 PASS，最后才在部署清单里露馅。
+
+  【根治】版本号只允许有一个真源：
+      $Version = ((Select-String -Path (Join-Path $Root 'gradle.properties') `
+                  -Pattern '^mod_version=(.+)$').Matches[0].Groups[1].Value).Trim()
+
+  【教训】"同一个坑第二次踩"说明第一次的修法是**补丁**而不是**根治**。
+  第一次发现版本漂移时，我只改了"部署前按版本号过滤 jar"，
+  没有把版本号本身变成单一真源 —— 所以第二次换个地方又漂了。
+
+【坑 155】assemble 脚本的两个小坑
+  ① 用 git-bash 的 zip 命令打包 → 退出码 127（环境里没装 zip）
+     改用 Windows 原生 System.IO.Compression（PowerShell），
+     这个方案在本工程一直工作正常。
+
+  ② 用 jar.exe --create 打包临时目录时，
+     把 hsperfdata_BZX 也打进去了，报"另一个程序正在使用此文件"。
+     所以不能用 jar 工具打"解包后的工作目录"，
+     要用能精确指定条目列表的 API。
+
+【本轮的验证顺序（可复用）】
+  1) 改 engine（设置字段 + 持久化 + copy）
+  2) 加单元测试（11 条），跑通
+  3) **反验证**：故意破坏，确认测试会红
+  4) 改四个适配层（主开关拦截 + 右键开关接线）
+  5) 编译（3 个 Gradle 模块 + 1 个手工 javac）
+  6) 反编译 jar 确认新方法真的进去了
+  7) 打包（引用检查 + mixin 检查 + 语言 JSON 检查）
